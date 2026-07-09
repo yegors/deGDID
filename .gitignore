@@ -1,0 +1,31 @@
+# Secrets / machine-local junk — never commit
+
+# Credentials & env
+.env
+.env.*
+*.pem
+*.pfx
+*.key
+credentials.json
+
+# Experiment dumps that may contain hostnames, GDIDs, IPs
+docs/experiments/**/*.raw.txt
+docs/experiments/**/*-unredacted*
+docs/experiments/**/secrets*
+
+# Local tool output / OS junk
+*.log
+*.etl
+*.pcap
+*.pcapng
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# Explicit secret filenames
+**/lab-credentials*
+**/*password*.txt
+**/*password*.ps1
+**/secrets/

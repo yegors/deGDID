@@ -1,0 +1,37 @@
+# EXP-A1 — Offline OOBE, never online (baseline)
+
+Date: 2026-07-09  
+VM: Hyper-V lab guest (Win11)  
+Guest account: local-only (no MSA); hostname redacted for publish  
+
+## Setup
+
+- OOBE with `BYPASSNRO` → local account only
+- NIC **always disabled** / disconnected through install
+- Checkpoint taken after first desktop
+
+## Inspect (`host-probe.txt` — redacted)
+
+| Check | Result |
+|-------|--------|
+| Build | 26200 / Display **25H2** |
+| NIC | Ethernet = **Disconnected** |
+| HKCU IdentityCRL `LID` | **empty / absent** |
+| `.DEFAULT` `LID` | **empty / absent** |
+| SYSTEM (`S-1-5-18`) `LID` | **empty / absent** |
+| Token dir keys | **0** |
+| `wlidsvc` | Running / Manual |
+| `CDPSvc` | Running / Automatic |
+| `dosvc` | Running / Automatic |
+| `DiagTrack` | Running / Automatic |
+
+## Verdict
+
+**`[OBSERVED]` H1 supported:** Offline install with local account and no network → **no Device PUID / GDID minted yet**, even though CDP/wlidsvc/DiagTrack are running.
+
+Services can be up without a server-assigned install id. Mint appears gated on successful DeviceAdd (or equivalent) once network + `login.live.com` are reachable.
+
+## Next
+
+- EXP-A4 style: apply registration blocks **before** first online, then connect NIC — does mint stay prevented?
+- Or deeper offline inspect (full IdentityCRL tree, CDP folder) while still airgapped.
