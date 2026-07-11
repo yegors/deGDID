@@ -10,7 +10,9 @@ Guest account: local-only (no MSA); hostname redacted for publish
 - NIC **always disabled** / disconnected through install
 - Checkpoint taken after first desktop
 
-## Inspect (`host-probe.txt` — redacted)
+## Inspect (redacted)
+
+Raw inspect dump not committed. Summary: all LID paths empty; TokenKeys=0.
 
 | Check | Result |
 |-------|--------|

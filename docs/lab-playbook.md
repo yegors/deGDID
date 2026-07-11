@@ -1,8 +1,8 @@
-# Lab Playbook — VM Testing (Agent-Executable)
+﻿# Lab Playbook - VM Testing (Agent-Executable)
 
 Last updated: 2026-07-09
 
-Goal: prove what happens when we **prevent mint**, **block registration**, and **rotate GDID locally offline** — including breakage to Windows features and **Windows Update**.
+Goal: prove what happens when we **prevent mint**, **block registration**, and **rotate GDID locally offline** - including breakage to Windows features and **Windows Update**.
 
 This is the runbook for agent-driven experiments inside an isolated Windows VM. Results land in `docs/experiments/`.
 
@@ -12,13 +12,13 @@ This is the runbook for agent-driven experiments inside an isolated Windows VM. 
 
 | ID | Hypothesis | Pass criteria |
 |----|------------|---------------|
-| H1 | Offline install (no net through OOBE) → **no** `LID` / no `g:` until first DeviceAdd | No IdentityCRL Device PUID after OOBE offline — **PASS** `[OBSERVED]` EXP-A1 (26200/25H2) |
-| H2 | Blocking DeviceAdd/DDS hosts **before first online** prevents mint indefinitely (until unblock) | No `0018…` LID while blocks hold; attempts fail visibly (ETW/event log) |
-| H3 | On contaminated install, **local-only** rewrite of `LID`/`DeviceId` (no net) changes readable GDID | Inspect shows new value; no DeviceAdd traffic |
-| H4 | Local-only fake PUID + permanent registration blocks → OS stays usable for core desktop | Boot, shell, local apps OK; document what fails |
+| H1 | Offline install (no net through OOBE) -> **no** `LID` / no `g:` until first DeviceAdd | No IdentityCRL Device PUID after OOBE offline - **PASS** `[OBSERVED]` EXP-A1 (26200/25H2) |
+| H2 | Blocking DeviceAdd/DDS hosts **before first online** prevents mint indefinitely (until unblock) | No `0018...` LID while blocks hold; attempts fail visibly - **PASS short soak** `[OBSERVED]` EXP-A4 (hosts block; LiveId 0x800704CF); longer soak/reboot still open |
+| H3 | On contaminated install, **local-only** rewrite of `LID`/`DeviceId` (no net) changes readable GDID | Inspect shows new/absent value; no DeviceAdd - **PASS wipe** `[OBSERVED]` EXP-C (cleared offline) |
+| H4 | Local-only fake/absent PUID + permanent registration blocks -> OS stays usable for core desktop | Boot/shell OK; **no LID re-mint short soak** `[OBSERVED]` EXP-C; full breakage catalog still open |
 | H5 | Windows Update still works with DeviceAdd/DDS blocked (WU endpoints allowed) | `usoclient` / WU download+install succeeds |
-| H6 | Store / MSA / CDP features break under blocks or local-only rotate | Catalog failures; sign-in loops; Phone Link dead — expected |
-| H7 | Clearing identity state **without** blocks → silent **server** re-mint (new real GDID) | New `0018…` after online; DeviceAdd observed |
+| H6 | Store / MSA / CDP features break under blocks or local-only rotate | Catalog failures; sign-in loops; Phone Link dead - expected |
+| H7 | Clearing identity state **without** blocks -> silent **server** re-mint (new real GDID) | New `0018...` after online; DeviceAdd observed |
 | H8 | Feature update keeps local-only value if blocks hold; may re-mint if blocks lifted | Compare pre/post upgrade LID |
 
 ---
@@ -27,7 +27,7 @@ This is the runbook for agent-driven experiments inside an isolated Windows VM. 
 
 ### 1.1 Host / hypervisor
 
-- Hyper-V, VMware, or VirtualBox — snapshots mandatory.
+- Hyper-V, VMware, or VirtualBox - snapshots mandatory.
 - VM: Windows 11 (match research interest; note build), **generation 2**, enough disk for one feature update (~40GB+ free).
 - **NAT or host-only + controlled gateway** so we can firewall from guest *and* optionally sinkhole from host.
 - Do **not** use the daily driver. Do **not** sign into personal MSA on lab VMs if avoidable.
@@ -40,14 +40,14 @@ This is the runbook for agent-driven experiments inside an isolated Windows VM. 
 | `S1-oobe-offline` | OOBE completed, **airplane / no NIC**, local account |
 | `S2-baseline-online` | First online, natural mint allowed (control VM) |
 | `S3-blocked-never-mint` | Online but DeviceAdd/DDS blocked from first packet |
-| `S4-contaminated` | Has real GDID (from S2) — target for offline rotate |
+| `S4-contaminated` | Has real GDID (from S2) - target for offline rotate |
 | `S5-post-local-rotate` | After local-only rotate + blocks |
 | `S6-post-wu` | After Windows Update attempt under blocks |
 
 ### 1.3 Two VM roles (recommended)
 
-1. **Control** — normal online mint; never mutate; reference traffic + healthy Update.
-2. **Treatment** — blocks + local-only experiments; revert via snapshots.
+1. **Control** - normal online mint; never mutate; reference traffic + healthy Update.
+2. **Treatment** - blocks + local-only experiments; revert via snapshots.
 
 ---
 
@@ -93,11 +93,11 @@ Also record: Token subkey count; whether any `DeviceId` remains; CDP folder pres
 
 ---
 
-## 3. Block list (registration / graph) — v0
+## 3. Block list (registration / graph) - v0
 
 **Intent:** stop mint + DDS announce. **Allow:** Windows Update CDN / WU endpoints so H5 is testable.
 
-### 3.1 Block (hosts → `0.0.0.0` and/or Firewall Outbound Deny)
+### 3.1 Block (hosts -> `0.0.0.0` and/or Firewall Outbound Deny)
 
 ```
 login.live.com
@@ -115,9 +115,9 @@ edge.activity.windows.com
 
 Notes:
 
-- `login.live.com` block is nuclear for **all MSA** (Store, Xbox, OneDrive SSO). That is intentional for “never mint / never re-register” tests.
+- `login.live.com` block is nuclear for **all MSA** (Store, Xbox, OneDrive SSO). That is intentional for "never mint / never re-register" tests.
 - Prefer **Firewall** over hosts for TLS/SNI realities; combine both.
-- IP blocks drift — re-resolve each session; document IPs in experiment log.
+- IP blocks drift - re-resolve each session; document IPs in experiment log.
 - Do **not** blanket-block `*.microsoft.com` or Update will die and H5 is useless.
 
 ### 3.2 Allow (sanity for Update tests)
@@ -134,7 +134,7 @@ Exact WU endpoint set: follow current MS Update endpoint docs during the run; pa
 ### 3.3 Apply / remove helpers (guest)
 
 ```powershell
-# Example hosts append (Admin) — experiment only
+# Example hosts append (Admin) - experiment only
 $block = @(
   '0.0.0.0 login.live.com',
   '0.0.0.0 cs.dds.microsoft.com',
@@ -146,64 +146,64 @@ Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value ($block -j
 ipconfig /flushdns
 ```
 
-Firewall rules: New-NetFirewallRule per remote address after Resolve-DnsName — script later under `tools/`.
+Firewall rules: New-NetFirewallRule per remote address after Resolve-DnsName - script later under `tools/`.
 
 ---
 
 ## 4. Experiment matrix
 
-### EXP-A — Prevent generation at install
+### EXP-A - Prevent generation at install
 
 | Step | Action |
 |------|--------|
 | A1 | Boot ISO; disconnect NIC **before** OOBE network page (or refuse network). |
 | A2 | Create **local account** only. Snapshot `S1-oobe-offline`. |
-| A3 | Run inspect — expect no/empty device LID (document reality). |
-| A4 | Clone path: enable NIC **with blocks already applied** → use for days; inspect daily. |
-| A5 | Clone path: enable NIC **without** blocks → capture DeviceAdd (pktmon/Wireshark); inspect new LID. |
+| A3 | Run inspect - expect no/empty device LID (document reality). |
+| A4 | Clone path: enable NIC **with blocks already applied** -> use for days; inspect daily. |
+| A5 | Clone path: enable NIC **without** blocks -> capture DeviceAdd (pktmon/Wireshark); inspect new LID. |
 
 **Questions answered:** Can install complete without GDID? Does first online always mint? Do blocks prevent mint?
 
-### EXP-B — Contaminated install: server re-mint (control)
+### EXP-B - Contaminated install: server re-mint (control)
 
 | Step | Action |
 |------|--------|
-| B1 | From `S2-baseline-online`, note GDID₀. |
-| B2 | Online: clear IdentityCRL device sessions / CDP state (document exact keys deleted — study GDID-Changer approach, don’t run opaque binaries blindly). |
-| B3 | Reboot online; capture traffic; note GDID₁. |
+| B1 | From `S2-baseline-online`, note GDIDâ‚€. |
+| B2 | Online: clear IdentityCRL device sessions / CDP state (document exact keys deleted - study GDID-Changer approach, don't run opaque binaries blindly). |
+| B3 | Reboot online; capture traffic; note GDIDâ‚. |
 
-**Questions:** What does “official” rotate look like? (Contrast with local-only.)
+**Questions:** What does "official" rotate look like? (Contrast with local-only.)
 
-### EXP-C — Local-only rotation (offline) ★ priority
+### EXP-C - Local-only rotation (offline) â˜… priority
 
 | Step | Action |
 |------|--------|
 | C1 | From `S4-contaminated`, **disable NIC** (airplane). Snapshot. |
-| C2 | Inspect GDID₀; export Token key names (not tickets). |
-| C3 | **Local-only mutate** (escalating aggressiveness — stop at first stable variant): |
-| | **C3a** Overwrite `LID` / all `DeviceId` with a new random `0018…`-shaped 64-bit hex (same format). |
-| | **C3b** Delete Token subkeys’ `DeviceTicket` + `DeviceId` but leave/replace `LID`. |
+| C2 | Inspect GDIDâ‚€; export Token key names (not tickets). |
+| C3 | **Local-only mutate** (escalating aggressiveness - stop at first stable variant): |
+| | **C3a** Overwrite `LID` / all `DeviceId` with a new random `0018...`-shaped 64-bit hex (same format). |
+| | **C3b** Delete Token subkeys' `DeviceTicket` + `DeviceId` but leave/replace `LID`. |
 | | **C3c** Delete CDP `%LOCALAPPDATA%\ConnectedDevicesPlatform\*`. |
 | | **C3d** Also patch `.DEFAULT` + `S-1-5-18` IdentityCRL `LID` if present. |
-| C4 | Reboot **still offline**. Inspect — does value stick? Do services recreate old value from somewhere else? |
+| C4 | Reboot **still offline**. Inspect - does value stick? Do services recreate old value from somewhere else? |
 | C5 | Apply **registration blocks**, then enable NIC. |
-| C6 | Monitor 1h: any DeviceAdd? Does LID revert to GDID₀? Flip to new server id? Stay at local fake? |
+| C6 | Monitor 1h: any DeviceAdd? Does LID revert to GDIDâ‚€? Flip to new server id? Stay at local fake? |
 | C7 | Exercise: Explorer, Notepad, Edge (non-MSA site), optional Store open (expect fail), `usoclient StartScan`. |
 
-**Questions:** Can we own the local fingerprint without talking to MS? Does Windows “heal” from a private cache? Do blocks keep a fake id from being replaced?
+**Questions:** Can we own the local fingerprint without talking to MS? Does Windows "heal" from a private cache? Do blocks keep a fake id from being replaced?
 
-### EXP-D — Windows Update under blocks
+### EXP-D - Windows Update under blocks
 
 | Step | Action |
 |------|--------|
 | D1 | On `S5` (local rotate + blocks), run Update scan/download/install cumulative or small CU. |
 | D2 | If fails, binary-search: unblock WU hosts only (already allowed) vs accidental overblock. |
-| D3 | After success, inspect LID — unchanged? |
+| D3 | After success, inspect LID - unchanged? |
 | D4 | Optional: attempt feature update on a disposable snap (long). |
 
-**Questions:** H5/H8 — updates vs identity stack coupling.
+**Questions:** H5/H8 - updates vs identity stack coupling.
 
-### EXP-E — Breakage catalog
+### EXP-E - Breakage catalog
 
 For each of {blocks only, local-rotate only, both}:
 
@@ -215,13 +215,13 @@ For each of {blocks only, local-rotate only, both}:
 | MSA sign-in in Settings | Attempt |
 | OneDrive / Xbox | Launch |
 | Phone Link / CDP Near Share | Launch |
-| Activation / Settings → System | Note any device auth errors |
+| Activation / Settings -> System | Note any device auth errors |
 | Edge sync | Optional |
 | Defender cloud sample submit | Optional note |
 
 Record: works / degraded / broken + error text.
 
-### EXP-F — Revert / unblock
+### EXP-F - Revert / unblock
 
 | Step | Action |
 |------|--------|
@@ -231,7 +231,7 @@ Record: works / degraded / broken + error text.
 
 ---
 
-## 5. Local-only rotate — candidate procedures (research, not gospel)
+## 5. Local-only rotate - candidate procedures (research, not gospel)
 
 > Do this **only in VMs**. Host experiments need explicit user OK.
 
@@ -239,13 +239,13 @@ Record: works / degraded / broken + error text.
 
 - Real device PUIDs often `0018` + 12 hex digits.
 - Server form `g:` + decimal of that uint64.
-- Local-only value is **not** Microsoft-recognized; it’s a **decoy / discontinuity** unless they re-mint.
+- Local-only value is **not** Microsoft-recognized; it's a **decoy / discontinuity** unless they re-mint.
 
 ### 5.2 Minimal mutate (C3a)
 
 1. Generate `NewLid` = `'0018' + [guid]::NewGuid().ToString('N').Substring(0,12)` (or crypto random 48 bits).
 2. Set `LID` in HKCU + `.DEFAULT` + SYSTEM hives (SYSTEM needs elevated / psexec).
-3. For each Token subkey with `DeviceId`, set to `NewLid` **or delete** `DeviceId`+`DeviceTicket` (prefer delete tickets — avoids auth with mismatched id).
+3. For each Token subkey with `DeviceId`, set to `NewLid` **or delete** `DeviceId`+`DeviceTicket` (prefer delete tickets - avoids auth with mismatched id).
 4. Do **not** upload tickets anywhere.
 
 ### 5.3 Expected failure modes
@@ -265,50 +265,49 @@ Record: works / degraded / broken + error text.
 
 When user says **go** and a lab VM is available (RDP/SSH/Hyper-V access or user runs commands I provide):
 
-### Phase L0 — Prep (user)
+### Phase L0 - Prep (user)
 
 1. Create Win11 VM + snapshots capability.
 2. Confirm agent can run commands in-guest (Cursor on VM, or remoting).
 3. Copy this repo into the guest (or sync `docs/` + future `tools/`).
 
-### Phase L1 — I implement tooling in-repo
+### Phase L1 - Tooling in-repo
 
-1. `tools/inspect-gdid.ps1` — read-only snapshot.
-2. `tools/block-registration.ps1` — apply/remove v0 block list (hosts + firewall), dry-run flag.
-3. `tools/local-rotate-gdid.ps1` — **offline-only guard** (abort if default route / live.net); mutate LID; log actions.
-4. `docs/experiments/README.md` — index.
+1. Root `degdid.ps1` - status / protect / wipe / decoy / block / unblock.
+2. `tools/hunt-lid-source.ps1` - optional research hunter.
+3. `docs/experiments/README.md` - index.
 
-### Phase L2 — I run EXP-A on treatment VM
+### Phase L2 - I run EXP-A on treatment VM
 
 1. Guide offline OOBE if user must click UI; then I inspect.
 2. Apply blocks; go online; monitor; write `docs/experiments/EXP-A/notes.md`.
 
-### Phase L3 — Control mint (EXP-A5 / S2)
+### Phase L3 - Control mint (EXP-A5 / S2)
 
-1. Separate snap without blocks; capture mint; save GDID₀ (redact in public docs).
+1. Separate snap without blocks; capture mint; save GDIDâ‚€ (redact in public docs).
 
-### Phase L4 — EXP-C local-only ★
+### Phase L4 - EXP-C local-only â˜…
 
-1. Contaminate or use S2 clone → airplane.
-2. Run local-rotate tool; reboot offline; inspect.
+1. Contaminate or use S2 clone -> airplane.
+2. Run `degdid.ps1 -Wipe` or `-Protect`; reboot offline; inspect.
 3. Enable blocks; online; 1h soak; inspect + pktmon summary.
 4. Write results + breakage table.
 
-### Phase L5 — EXP-D Update
+### Phase L5 - EXP-D Update
 
 1. Attempt CU under blocks; document success/fail; LID stability.
 
-### Phase L6 — Synthesize
+### Phase L6 - Synthesize
 
 1. Update `countermeasures.md` with **Prevent-at-install**, **Block**, **Local-only rotate** rows.
 2. Update `architecture.md` / `open-questions.md` with `[OBSERVED]` lab tags.
-3. Explicit “will Windows break?” section with evidence.
+3. Explicit "will Windows break?" section with evidence.
 
 ### Stop conditions
 
-- Cannot obtain snapshot-capable VM → pause; deliver scripts + manual checklist only.
-- Accidental use of personal MSA → abort treatment; revert snap.
-- WU fails and blocks too broad → narrow allow-list; don’t declare H5 failed until allow-list verified.
+- Cannot obtain snapshot-capable VM -> pause; deliver scripts + manual checklist only.
+- Accidental use of personal MSA -> abort treatment; revert snap.
+- WU fails and blocks too broad -> narrow allow-list; don't declare H5 failed until allow-list verified.
 
 ---
 
@@ -317,7 +316,7 @@ When user says **go** and a lab VM is available (RDP/SSH/Hyper-V access or user 
 - Lab VMs only for destructive identity edits.
 - Redact real GDIDs in committed notes (`g:REDACTED`, prefix `0018` OK).
 - No coaching to evade lawful process; goal is consumer agency + breakage science.
-- Don’t decode or exfiltrate `DeviceTicket` blobs into git.
+- Don't decode or exfiltrate `DeviceTicket` blobs into git.
 
 ---
 
@@ -328,4 +327,4 @@ When user says **go** and a lab VM is available (RDP/SSH/Hyper-V access or user 
 3. Answer: **Do registration blocks keep a decoy from being replaced?** 
 4. Answer: **What breaks?** (table)
 5. Answer: **Do updates still work?** (H5)
-6. v0 recommended procedure in `countermeasures.md` — or a documented dead end
+6. v0 recommended procedure in `countermeasures.md` - or a documented dead end

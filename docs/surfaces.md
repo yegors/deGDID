@@ -1,6 +1,6 @@
 # GDID Threat / Attack Surface Map
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
 Inventory of places GDID (or its Device PUID twin) is stored, computed against, emitted, or correlated. Companion to `architecture.md`.
 
@@ -13,6 +13,7 @@ Inventory of places GDID (or its Device PUID twin) is stored, computed against, 
 | Path | Value | Access | Notes |
 |------|-------|--------|-------|
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | User | Primary readable Device PUID |
+| `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property` | value name = LID hex | User | **Local rehydrate blob** (~346B); wipe LID alone is not enough (`EXP-C3`) |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token\*` | `DeviceId`, `DeviceTicket` | User | Per-client tickets; same DeviceId |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties` | (account props) | User | User-side MSA props |
 | `HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | Elevated | Default profile; often present once minted |
@@ -42,7 +43,12 @@ Inventory of places GDID (or its Device PUID twin) is stored, computed against, 
 | `{5D661950-3475-41CD-A2C3-D671A3162BC1}` | New Outlook (`olkmain.dll`) |
 | `{28520974-…}`, `{2B379600-…}`, `{D6D5A677-…}`, `{E8B2105F-…}` | Built into `wlidsvc` / OnlineId (system MSA clients) |
 | `{E8B2105F-…}` | Sometimes present empty (no DeviceId/ticket) |
-| `{67082621-…}`, `{C89E2069-…}`, `{F0C62012-…}` | **Unresolved** — not in readable Appx; likely more MSA service clients |
+| `{67082621-8D18-4333-9C64-10DE93676363}` | WebView2-associated ticket: independent sandbox traces show `msedgewebview2.exe` reading its `DeviceId` / `DeviceTicket`; exact app-registration display name remains unpublished `[OBSERVED]` |
+| `{C89E2069-AF13-46DB-9E39-216131494B87}` | CloudApp (CloudPlus) MSA client association — IdentityCRL negative-cache entry is scoped to `tip.cloudapp.net`; not an inbox-Windows attribution `[ASSESSED]` |
+| `{F0C62012-2CEF-4831-B1F7-930682874C86}` | Microsoft Store licensing / `WinStoreAuth`: debug output calls `WinStoreAuth::AuthenticationInternal::SetMsaClientId` with this value `[STATIC]` |
+
+The first two are source associations, not decoded ticket contents; do not infer their
+scopes or privileges from the registry key alone.
 
 ### 1.3 Filesystem
 
@@ -83,15 +89,15 @@ Telemetry policy sample (consumer): `AllowTelemetry` / `MaxTelemetryAllowed` oft
 
 | Endpoint | Direction | When | GDID relevance |
 |----------|-----------|------|----------------|
-| `login.live.com` `/ppsecure/deviceaddcredential.srf` | Out HTTPS | Install, re-provision | **Mints** GlobalDeviceID |
+| `login.live.com` `/ppsecure/deviceaddcredential.srf` | Out HTTPS | Install, re-provision | **Provisions** Device PUID (response field varies by flow) |
 | `login.live.com` `/RST2.srf` (+ related) | Out HTTPS | Token issue | Device tokens carrying/binding id |
 | `*.login.live.com` | Out HTTPS | Ongoing MSA | Device auth |
-| `cs.dds.microsoft.com` | Out HTTPS | DDS associations | Official DDS endpoint `[MSDOC]` |
-| `dds.microsoft.com` | Out HTTPS | CDP registration | In `cdp.dll` |
-| `aad.cs.dds.microsoft.com` | Out HTTPS | AAD DDS | Resolved on lab |
-| `fd.dds.microsoft.com` | Out | CDP strings | NXDOMAIN on lab (2026-07-09) |
-| `cdpcs.access.microsoft.com` | Out | CDP strings | NXDOMAIN on lab |
-| `ztd.dds.microsoft.com` | Out HTTPS | Autopilot OOBE | DDS family; uses x-device-token |
+| `cs.dds.microsoft.com` | Out HTTPS | DDS associations | Current Traffic Manager → Azure Front Door route `[MSDOC]` `[OBSERVED]` |
+| `dds.microsoft.com` | Logical DDS service name | CDP string | Bare name is currently DNS NODATA (no A/AAAA) `[STATIC]` `[OBSERVED]` |
+| `aad.cs.dds.microsoft.com` | Out HTTPS | AAD DDS | Current Traffic Manager → Azure Front Door route `[OBSERVED]` |
+| `fd.dds.microsoft.com` | Static string | Unknown | Current NXDOMAIN; legacy/role remains unproven `[STATIC]` `[OBSERVED]` |
+| `cdpcs.access.microsoft.com` | Static string | Unknown | Current NXDOMAIN; legacy/role remains unproven `[STATIC]` `[OBSERVED]` |
+| `ztd.dds.microsoft.com` | Out HTTPS | Autopilot OOBE | Current Traffic Manager → regional Autopilot Azure host; uses x-device-token `[OBSERVED]` |
 | `activity.windows.com` | Out HTTPS | Activity feed | Token scope ties to device id |
 | `assets.activity.windows.com` | Out | Activity assets | Adjacent |
 | `edge.activity.windows.com` | Out | Edge activity | Adjacent |
@@ -100,8 +106,8 @@ Telemetry policy sample (consumer): `AllowTelemetry` / `MaxTelemetryAllowed` oft
 
 | Endpoint / system | Notes |
 |-------------------|-------|
-| Delivery Optimization / WUfB `UCDOStatus` | **Documented** `GlobalDeviceId` field |
-| `*.dl.delivery.mp.microsoft.com`, `geo.prod.do.dsp.mp.microsoft.com` | DO content path; id reported in compliance channel not necessarily every download URL |
+| Delivery Optimization / WUfB `UCDOStatus` | **Documented** `GlobalDeviceId` field in a reporting snapshot |
+| `*.dl.delivery.mp.microsoft.com`, `geo.prod.do.dsp.mp.microsoft.com` | DO content path; public docs do not establish a GDID header on every download request |
 
 ### 3.3 Adjacent telemetry (confirm GDID embedding in lab)
 
@@ -111,12 +117,21 @@ Telemetry policy sample (consumer): `AllowTelemetry` / `MaxTelemetryAllowed` oft
 | `settings-win.data.microsoft.com` | Settings / config |
 | `watson.telemetry.microsoft.com` | WER |
 
-### 3.4 Lab DNS check (2026-07-09)
+### 3.4 DNS snapshots
 
 Resolved: `login.live.com`, `cs.dds.microsoft.com`, `aad.cs.dds.microsoft.com`, `activity.windows.com`, `ztd.dds.microsoft.com`, DO/geo hosts, `v10.events.data.microsoft.com`, `settings-win.data.microsoft.com`.  
 Failed/empty: `fd.dds.microsoft.com`, `cdpcs.access.microsoft.com`, bare `dds.microsoft.com` A-record quirks.
 
-No established TCP to those IPs at snapshot time (idle).
+On the configured resolver (2026-07-11), `cs.dds.microsoft.com` chained via
+`dgsdeviceregistrationsatm.trafficmanager.net` to `mr-b02.tm-azurefd.net`;
+`aad.cs.dds.microsoft.com` used the analogous `dgscontinuumonlyatm` chain; and
+`ztd.dds.microsoft.com` chained via `aps.trafficmanager.net` to a regional
+`autopilotservice-prod-*.cloudapp.azure.com` host. `fd.dds.microsoft.com` and
+`cdpcs.access.microsoft.com` still returned NXDOMAIN; bare `dds.microsoft.com`
+returned NODATA. `[OBSERVED]`
+
+No established TCP to those IPs at either idle snapshot. DNS answers are
+resolver/region/time dependent, not endpoint policy.
 
 ---
 
@@ -173,6 +188,25 @@ Disabling these reduces *use* of the graph (not always the existence of LID):
 - Activity History / timeline
 - Some Store / Xbox / MSA SSO convenience
 - Autopilot (enterprise) — separate but same DeviceAdd family
+
+### 6.1 Supported enterprise control
+
+`./Device/Vendor/MSFT/Policy/Config/Connectivity/AllowConnectedDevices = 0`
+is the supported device-scope policy to make CDP unavailable after reboot.
+`[MSDOC]` It is a CDP/cross-device control, not a server-history eraser or a
+guarantee that every identity plane stops.
+
+Microsoft warns that blocking/disabling connected-device and related account settings
+can remove the Microsoft Entra sign-in option in Autopilot pre-provisioning and lead
+to local-account OOBE instead. Treat it as a post-enrollment, pilot-tested control —
+not a universal “DDS off, Entra unchanged” switch. `[MSDOC]`
+
+### 6.2 Recall boundary
+
+No public Recall documentation names GDID, DDS, or CDP as part of its snapshot path.
+Microsoft documents Recall as opt-in local processing/storage, with encrypted snapshots
+not sent to Microsoft. `[MSDOC]` This narrows the claimed relationship but does not
+prove that unrelated Windows services cannot emit a GDID while Recall is enabled.
 
 ---
 

@@ -29,3 +29,5 @@ Desktop.ini
 **/*password*.txt
 **/*password*.ps1
 **/secrets/
+tools/.last-decoy*
+**/*-unredacted*

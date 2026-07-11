@@ -1,6 +1,6 @@
 # GDID Architecture — Generation, Lifecycle, Correlation
 
-Last updated: 2026-07-09  
+Last updated: 2026-07-11  
 Confidence tags: `[COURT]` `[OBSERVED]` `[STATIC]` `[ASSESSED]` `[MSDOC]`
 
 ## Executive model
@@ -61,9 +61,12 @@ Court example: `g:6755467234350028` → hex `0x0018000FC8CB93CC`.
    ```
    https://login.live.com/ppsecure/deviceaddcredential.srf
    ```
-3. Request body includes **`DeviceInfo` components** (BIOS/SMBIOS, disk, TPM material, etc.) — hardware is *inputs to the registration ceremony*, not the GDID itself. `[ASSESSED]` (GDID-Changer / Autopilot writeups)
-4. Server returns identifiers including **`GlobalDeviceID` / Device PUID** (and related HWDeviceID / tokens depending on flow). `[STATIC]` `[ASSESSED]`
-5. Client persists PUID into IdentityCRL / identity store. `[OBSERVED]` `[STATIC]`
+3. Request body includes **`DeviceInfo` components** (EKPub, SMBIOS serial, OfflineDeviceID, disk, TPM material, etc.) — hardware is *input to the registration ceremony*, not the GDID itself. `[OBSERVED]` (Autopilot capture) `[ASSESSED]` (component decoding)
+4. The response field name is **flow-specific**:
+   - Public-PDB RE of Win11 build 26200 `wlidsvc.dll` shows the Device-PUID parser targeting `/S:Envelope/S:Body/ps:DeviceUpdatePropertiesResponse/HWPUIDFlipped`. `[STATIC]`
+   - An Autopilot DeviceAdd capture shows `HWDeviceID` and `GlobalDeviceID` in its response. `[OBSERVED]`
+   - `<ps:DevicePUID>` is a code/schema string; it is not, by itself, proof that every current response exposes a separate `DevicePUID` element. `[STATIC]`
+5. Client persists the PUID into IdentityCRL / identity store. `[OBSERVED]` `[STATIC]`
 
 Autopilot-adjacent sibling flow (same mint family, enterprise path):
 
@@ -74,7 +77,7 @@ DeviceAddRequest → login.live.com
   → ztd.dds.microsoft.com Autopilot bootstrap (uses token, not raw hash)
 ```
 
-`[ASSESSED]` source: Call4Cloud Autopilot deep-dive. Same `login.live.com` device-add surface; DDS family host `ztd.dds.microsoft.com`.
+`[OBSERVED]` source: Call4Cloud Autopilot traffic capture. Same `login.live.com` DeviceAdd surface; DDS-family host `ztd.dds.microsoft.com`.
 
 ### 2.2 Triggers for (re)registration / use
 
@@ -90,8 +93,8 @@ DeviceAddRequest → login.live.com
 ### 2.3 MSA vs anonymous / local account
 
 - Early RE focused on MSA Device PUID via `wlidsvc`. `[STATIC]`
-- Later correction: **CDP has an anonymous device path** if no MSA is connected; local account does **not** mean “no GDID.” `[ASSESSED]` (author note on gdid-reversal; GDID-Changer tested on local-account VMs)
-- Exact anonymous mint binary path still needs lab capture on a clean non-MSA image. See `open-questions.md`.
+- Later correction: **CDP has an anonymous device path** if no MSA is connected; local account does **not** mean “no GDID.” `[ASSESSED]`
+- **`[OBSERVED]` EXP-B (lab):** On a local-account Win11 25H2 image, after registration blocks were removed, a shared `0018…` Device PUID appeared in **SYSTEM and `.DEFAULT`** within ~2 minutes **without** MSA and **without** HKCU `ExtendedProperties\LID`. Inspect tools must read machine hives, not only HKCU.
 
 ---
 
@@ -103,7 +106,7 @@ DeviceAddRequest → login.live.com
 
 - `CDeviceIdentityBase::CreateNewDeviceIdentity` / `Provision` / `BindDeviceToHardware`
 - `DeviceAssociateRequest` → Passport PPCRL SOAP → `login.live.com`
-- Parses response for Device PUID (`<ps:DevicePUID>`, XPath involving `HWPUIDFlipped`)
+- Has `<ps:DevicePUID>` schema/string material; `CAssociateDeviceRequest::ParseResponseBody` targets `.../ps:DeviceUpdatePropertiesResponse/HWPUIDFlipped`
 - `DeviceIdStore::LogToRegistry`
 - `BCryptGenRandom` generates a **device authentication key** bound via `BindDeviceToHardware` — **not** the PUID/GDID
 
@@ -114,7 +117,11 @@ DeviceAddRequest → login.live.com
 | Device PUID / GDID | **Server-assigned** | Public-ish install fingerprint (`g:…`) |
 | Device key / cert material | Local random + hardware bind | Authenticates as *this* device to MSA |
 
-Hardware in `DeviceAddRequest` may let Microsoft **recognize** returning silicon (`[ASSESSED]` residual correlation risk). It does **not** mean GDID equals `hash(serials)` — reinstall proves that (`[COURT]`).
+DeviceAdd sends durable hardware material, and the separate Autopilot service can match an
+uploaded hardware hash after receiving a device token. This proves that Microsoft has
+the *capability* to correlate hardware-backed registrations; it does **not** show that
+the GDID backend joins old/new installations, or how strong such a join would be.
+`[OBSERVED]` `[ASSESSED]` GDID is still not `hash(serials)` — reinstall proves that (`[COURT]`).
 
 ### 3.2 Consumer: CDP does not compute the ID
 
@@ -169,7 +176,7 @@ Also observed on a typical online install (`[OBSERVED]`):
 
 | When | Host / URL | Purpose | Tag |
 |------|------------|---------|-----|
-| First provision / re-provision | `login.live.com` especially `/ppsecure/deviceaddcredential.srf` | DeviceAdd; returns GlobalDeviceID / PUID | `[ASSESSED]` `[MSDOC]` device auth |
+| First provision / re-provision | `login.live.com` especially `/ppsecure/deviceaddcredential.srf` | DeviceAdd; provisions PUID (response field varies by flow; see §2.1) | `[ASSESSED]` `[MSDOC]` device auth |
 | Token / STS | `login.live.com` `/RST2.srf` (and related) | Device security tokens | `[ASSESSED]` |
 | Ongoing MSA | `*.login.live.com` | Account + device auth | `[MSDOC]` |
 
@@ -177,14 +184,24 @@ Also observed on a typical online install (`[OBSERVED]`):
 
 | Host | Role | Tag |
 |------|------|-----|
-| `cs.dds.microsoft.com` | Official “Device Directory Service — user-device associations + metadata” | `[MSDOC]` |
-| `dds.microsoft.com` | Referenced in `cdp.dll` strings | `[STATIC]` |
-| `fd.dds.microsoft.com` | In `cdp.dll`; DNS NXDOMAIN on this net (2026-07-09) | `[STATIC]` / `[OBSERVED]` |
-| `aad.cs.dds.microsoft.com` | AAD-flavored DDS | `[STATIC]` / DNS `[OBSERVED]` |
-| `cdpcs.access.microsoft.com` | In `cdp.dll`; NXDOMAIN here | `[STATIC]` |
-| `ztd.dds.microsoft.com` | Autopilot / ZTD bootstrap (DDS family) | `[ASSESSED]` |
+| `cs.dds.microsoft.com` | DDS associations; currently chains through Traffic Manager to Azure Front Door | `[MSDOC]` `[OBSERVED]` |
+| `dds.microsoft.com` | Referenced in `cdp.dll`; bare name currently returns DNS NODATA (no A/AAAA) | `[STATIC]` `[OBSERVED]` |
+| `fd.dds.microsoft.com` | In `cdp.dll`; current NXDOMAIN, role not publicly documented | `[STATIC]` `[OBSERVED]` |
+| `aad.cs.dds.microsoft.com` | AAD-flavored DDS; currently chains through Traffic Manager to Azure Front Door | `[STATIC]` `[OBSERVED]` |
+| `cdpcs.access.microsoft.com` | In `cdp.dll`; current NXDOMAIN, role not publicly documented | `[STATIC]` `[OBSERVED]` |
+| `ztd.dds.microsoft.com` | Autopilot / ZTD bootstrap; currently chains through Traffic Manager to a regional Autopilot Azure host | `[OBSERVED]` |
 
 **When:** CDP registration on startup / after state loss; ongoing graph sync for Phone Link, nearby share, continue-on-PC style features. `[OBSERVED]` ETW Startup registration; `[MSDOC]` DDS purpose.
+
+**Configured-resolver DNS snapshot (2026-07-11):** `cs.dds.microsoft.com` →
+`dgsdeviceregistrationsatm.trafficmanager.net` → `dgs-registration-endpoint-…b02.azurefd.net`
+→ `mr-b02.tm-azurefd.net` (A `150.171.110.23`, AAAA `2603:1061:14:116::1`).
+`aad.cs.dds.microsoft.com` takes the analogous `dgscontinuumonlyatm` chain (A
+`150.171.109.69`, AAAA `2603:1061:14:115::1`). `ztd.dds.microsoft.com` →
+`aps.trafficmanager.net` → regional `autopilotservice-prod-*.cloudapp.azure.com`
+(one answer `74.241.231.0`). `fd.dds.microsoft.com` and
+`cdpcs.access.microsoft.com` returned NXDOMAIN. `[OBSERVED]` DNS routing is
+resolver/region/time dependent; do not treat these addresses as an allow/block list.
 
 **Auth scopes observed in token cache (`[OBSERVED]` RE):**
 
@@ -194,6 +211,10 @@ service::activity.windows.com::MBI_SSL_SA_TOKEN_BROKER
 ```
 
 Also seen near CDP client id: `service::ssl.live.com::MBI_SSL` / roaming key purposes. `[STATIC]` / local Settings handler strings.
+
+These scope strings establish requested service audiences, **not** a readable claim map:
+the protected ticket format has not been decoded, so the complete set of scopes that
+carry or require a Device PUID remains open. `[ASSESSED]`
 
 ### 5.3 Activity / timeline
 
@@ -212,7 +233,12 @@ Also seen near CDP client id: `service::ssl.live.com::MBI_SSL` / roaming key pur
 | DO cloud / WUfB reports | `UCDOStatus.GlobalDeviceId` column | `[MSDOC]` |
 | DO download hosts | e.g. `*.dl.delivery.mp.microsoft.com`, `geo.prod.do.dsp.mp.microsoft.com` | `[OBSERVED]` local DO jobs |
 
-DO **reports** GDID; it does not mint it. Rows sit beside `City`, `Country`, `ISP`, `LastCensusSeenTime`. `[MSDOC]`
+DO **reports** GDID; it does not mint it. Rows sit beside `City`, `Country`, `ISP`, `LastCensusSeenTime`, and `TimeGenerated` is the snapshot time. `[MSDOC]`
+
+This is evidence of a reporting channel, **not** evidence that each DO content request
+has a GDID HTTP header. Public DO API documentation exposes caller-provided custom
+headers but not Windows' internal service headers; a controlled wire capture is still
+needed for that claim. `[MSDOC]` `[ASSESSED]`
 
 **When:** devices participating in Delivery Optimization / Update Compliance telemetry pipelines (enterprise reports more visible; consumer still runs `dosvc`).
 
@@ -234,6 +260,10 @@ Whether these payloads embed GDID specifically is **not fully proven** in our no
 - Does **not** require that Edge sent GDID in clear to ngrok.
 - **Does** require that Microsoft retained **some** association of GDID ↔ time ↔ destination/IP (OS networking telemetry, defender/smartscreen-class signals, DO/census, or other MS-side correlation — exact channel not named in press summaries).
 - VPN hides path from *destination*; it does **not** hide the install’s talks to Microsoft. `[ASSESSED]` (IBTimes / Register framing)
+
+The available court reporting identifies the **result**, not the responsible Windows
+component, browser, telemetry endpoint, or retention duration. It therefore cannot
+support a conclusion about Edge vs Chrome vs curl. `[COURT]` `[ASSESSED]`
 
 ---
 
@@ -301,4 +331,6 @@ Additional residual links (`[ASSESSED]`):
 - [UCDOStatus schema](https://learn.microsoft.com/en-us/windows/deployment/update/wufb-reports-schema-ucdostatus)
 - [Windows 11 endpoints (non-Enterprise)](https://learn.microsoft.com/en-us/windows/privacy/windows-11-endpoints-non-enterprise-editions)
 - [MS-CDP protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cdp/f5a15c56-ac3a-48f9-8c51-07b2eadbe9b4)
+- [Connectivity Policy CSP — AllowConnectedDevices](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-connectivity)
+- [Microsoft Privacy Statement](https://www.microsoft.com/en-us/privacy/privacystatement)
 - Local observation on Win11 26200-class lab/workstation samples (redacted)
