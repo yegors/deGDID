@@ -6,6 +6,11 @@ Last updated: 2026-07-11
 
 Define what we are defending against when we research and counter Microsoft Global Device Identifier (GDID) tracking - and what we are **not** claiming to solve.
 
+**GDID-only completion boundary:** on a supported unmanaged, single-user Windows 11
+system, the tool is complete when it can continuously block DeviceAdd and remove
+known active real Device PUID state. General telemetry suppression and discovery of
+the exact Stokes URL-association sensor are open research, not release gates.
+
 ---
 
 ## Assets
@@ -13,15 +18,18 @@ Define what we are defending against when we research and counter Microsoft Glob
 | Asset | Why it matters |
 |-------|----------------|
 | Install anonymity vs Microsoft | Ability for MS (or recipients of MS records) to recognize *this Windows install* over time |
-| Continuity break | Ability to end an old GDID's usefulness for *future* local correlation (local-only decoy and/or never-mint) |
-| Never-mint / starve registration | Prevent DeviceAdd and DDS registration so Microsoft never (or no longer) gets a live install id from this image |
-| Activity unlinkability | Reduce join of install id â†” browsing/IP/activity timelines |
+| Continuity break | Ability to remove known active real PUID state locally while preventing a replacement DeviceAdd |
+| Never-mint / starve registration | Continuously prevent DeviceAdd so Microsoft does not receive a new live install id from this image |
+| Activity unlinkability | Reduce join of install id ↔ browsing/IP/activity timelines |
 | Update survivability | Keep Windows Update working while identity registration is blocked |
 | User awareness | Know that the id exists, where it lives, what talks |
 
 Non-goals as primary assets: defeating court orders; hiding crime; full OS anonymity.
 
-**Preferred countermeasure direction (lab-validated core path):** prevent mint at install; on contaminated images, **expanded local wipe/decoy + continuous registration-server blocks** (`degdid.ps1 -Protect`) - not online server re-mint (that hands MS a fresh real GDID).
+**Preferred countermeasure direction:** prevent mint at install; on contaminated
+images, use the **canonical expanded wipe + continuous DeviceAdd blocks**
+(`degdid.ps1 -Protect`) - not online server re-mint, which hands Microsoft a fresh
+real GDID. Decoy mode is experimental.
 
 ---
 
@@ -55,15 +63,15 @@ Unknown exact sensor for "URL accessed by GDID" - treat as **high-impact, channe
 
 ```
 [ User apps / browser ] --TLS--> [ Third-party sites ]
-         â”‚
-         â”‚ OS / WinHTTP / services
-         â–¼
+         |
+         | OS / WinHTTP / services
+         v
 [ Windows identity + CDP + DO + DiagTrack ]
-         â”‚ TLS to Microsoft
-         â–¼
+         | TLS to Microsoft
+         v
 [ login.live.com | DDS | activity | telemetry backends ]
-         â”‚
-         â–¼
+         |
+         v
 [ Microsoft retention / LE disclosure ]
 ```
 
@@ -84,7 +92,7 @@ VPN typically sits under apps or system tunnel; **Microsoft-bound service traffi
 **Status:** Expected; court footnote multi-GDID per user.
 
 ### T3 - Third-party event attribution via MS records
-**Precondition:** MS retains GDIDâ†”timeâ†”destination; LE asks.  
+**Precondition:** MS retains GDID↔time↔destination; LE asks.
 **Impact:** VPN'd actions still attributed to install.  
 **Status:** Demonstrated in Stokes; channel opaque.
 
@@ -107,20 +115,37 @@ VPN typically sits under apps or system tunnel; **Microsoft-bound service traffi
 
 ## What countermeasures can / cannot do
 
-| Can (lab-backed where noted) | Cannot (honest) |
-|------------------------------|-----------------|
+| Can (implemented or lab-backed where noted) | Cannot (honest) |
+|---------------------------------------------|-----------------|
 | Detect and display current GDID (`degdid.ps1 -Status`) | Erase Microsoft's historical records |
-| Starve DeviceAdd/DDS with hosts+firewall blocks (`-Protect`) | Guarantee no other MS id plane tracks you |
-| Expanded local wipe / decoy (incl. Immersive Property) | Prevent LE with lawful MS process on *new* id |
+| Apply dual-stack hosts, report FQDN firewall hydration, and enforce a `wlidsvc` service-firewall block (`-Protect`) | Guarantee no other MS id plane tracks you |
+| Canonically wipe known active real PUID state, including the conservative Immersive Property/Token bundle | Prove which single C3 store was uniquely causal without ablation |
+| Offer an experimental local decoy mode | Claim the decoy is server-issued or recognized |
 | Isolate research in VMs | Make Windows "anonymous OS" |
-| Keep WU/Defender-class servicing under blocks (EXP-D) | Hide all OS->MS metadata |
+| Preserve a WU scan and Defender update under the historical block (partial EXP-D evidence) | Hide all OS->MS metadata |
+
+The earlier hosts-based lab runs support the core DeviceAdd-starvation model
+(`[LAB]` EXP-A4/C3), while the integrated dual-stack FQDN + service-firewall
+implementation still needs longitudinal validation.
+
+### Release hardening still required
+
+- 24-hour protection soak across multiple reboots with the current integrated rules.
+- The real target-user/machine GDID contamination shape is covered by interim
+  EXP-G; actual MSA UI/sign-in behavior is optional compatibility research.
+- The advertised mutation scope is narrowed to 25H2/build 26200; 24H2 requires
+  its own closure matrix before support expands.
+
+C3 single-store ablation would strengthen the causal account of rehydration, but the
+canonical wipe already removes the entire observed bundle; unique-cause attribution
+is research, not a GDID-only release gate.
 
 ---
 
 ## Assumptions
 
 1. Consumer Windows 10/11 with network access will attempt device registration.
-2. Local account â‰  no GDID (anonymous path) - **confirmed** EXP-B (SYSTEM/`.DEFAULT` mint without MSA).
+2. Local account ≠ no GDID (anonymous path) - **confirmed** `[LAB]` EXP-B (SYSTEM/`.DEFAULT` mint without MSA).
 3. Hardware sent at DeviceAdd enables *possible* cross-reinstall matching - unproven strength.
 4. Official opt-out for GDID does not exist.
 

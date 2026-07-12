@@ -3,6 +3,7 @@
 Date: 2026-07-11  
 VM: Hyper-V Win11 lab (build 26200 / 25H2), local account, no MSA  
 Checkpoint before NIC: `S1b-offline-blocked-*`
+Status: **`[OBSERVED]` GDID-only short-soak result**
 
 ## Procedure
 
@@ -44,13 +45,13 @@ Interpretation: identity stack **tried** to talk, failed because DeviceAdd/login
 
 - Hosts-file blocks are the effective control here.
 - First Apply while offline created firewall rules to `0.0.0.0` (DNS followed hosts) - those rules were removed as useless; hosts retained.
-- Follow-up: block path resolves via an explicit DNS server (e.g. `Resolve-DnsName -Server 1.1.1.1`) **before** relying on hosts, when adding IP firewall rules (implemented with job timeouts in `degdid.ps1`).
+- Historical follow-up at the time used explicit-resolver IP rules with job timeouts. The current hardened rewrite no longer freezes DNS answers into static IP rules; it uses dynamic FQDN objects plus a service-scoped `wlidsvc` deny.
 
 ## Verdict
 
-**`[OBSERVED]` H2 PASS (short soak):** With registration hosts blocked **before** first online, general Internet works and **no GDID/Device PUID is minted** after service bounce + ~90s. LiveId errors confirm failed provision attempts.
+**`[OBSERVED]` H2 supported for the tested short soak:** With registration hosts blocked **before** first online, general Internet worked and **no GDID/Device PUID appeared in the inspected stores** after a service bounce + ~90s. LiveId errors confirm failed provision attempts during that window.
 
-Caveats: longer soak / reboot / Store launch not yet tested; DoH/hardcoded IPs could bypass hosts (firewall IP list still TODO when online).
+The completion gate is GDID-only and limited to this short window. Longer soak, reboot, Store launch, and bypass resistance were not tested; DoH/hardcoded IPs could bypass hosts (firewall IP list still TODO when online).
 
 ## Next
 

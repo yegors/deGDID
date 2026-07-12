@@ -4,13 +4,17 @@ Last updated: 2026-07-11
 
 ## Status
 
-- **Repo purpose:** deep research of GDID-class Microsoft device tracking + practical countermeasures. See [`plan.md`](./plan.md).
+- **Repo purpose:** deep research of GDID-class Microsoft device tracking + practical countermeasures. [`plan.md`](./plan.md) records the historical phases; the current release boundary is below and in `open-questions.md`.
 - This file is news + quick findings. Deep map lives in:
   - [`architecture.md`](./architecture.md) - when/how IDs are generated, network I/O
   - [`surfaces.md`](./surfaces.md) - threat/storage/endpoint inventory
   - [`threat-model.md`](./threat-model.md) - adversaries & limits
   - [`glossary.md`](./glossary.md) / [`open-questions.md`](./open-questions.md)
 - Project tooling: root [`degdid.ps1`](../degdid.ps1) (public); lab helpers under `tools/`.
+- **Tool completion scope:** continuously block DeviceAdd and remove known active
+  real PUID state on a supported unmanaged, single-user Windows 11 system. General
+  telemetry suppression and the exact Stokes URL sensor are research, not release
+  gates. Wipe is canonical; decoy is experimental.
 
 ---
 
@@ -80,15 +84,15 @@ There is **no** consumer-facing Learn page titled "Global Device Identifier" exp
 - Build-26200 public-PDB RE identifies the `wlidsvc.dll` response parse target as
   `ps:DeviceUpdatePropertiesResponse/HWPUIDFlipped`; `<ps:DevicePUID>` is also
   present in its schema/string material. `[STATIC]`
-- A separate Autopilot DeviceAdd capture observes `HWDeviceID` and
+- A separate cited Autopilot DeviceAdd capture observes `HWDeviceID` and
   `GlobalDeviceID` in its SOAP response. Treat that as a flow-specific capture,
   not proof of one immutable response schema across consumer, anonymous, 24H2, and
-  25H2 paths. `[OBSERVED]`
+  25H2 paths. `[CITED-RE]`
 - DeviceAdd supplies durable hardware inputs (EKPub, SMBIOS serial, OfflineDeviceID,
   TPM material). Autopilot demonstrates that a separate Microsoft backend can match
   an uploaded hardware hash after it receives the device token; it does **not**
   prove the GDID service joins reinstalls or quantify that join's confidence.
-  `[OBSERVED]` `[ASSESSED]`
+  `[CITED-RE]` `[ASSESSED]`
 
 ### Public policy / product boundary
 
@@ -101,10 +105,14 @@ There is **no** consumer-facing Learn page titled "Global Device Identifier" exp
   GDID/IP/URL duration. `[MSDOC]` `[ASSESSED]`
 - The supported managed control is
   [`Connectivity/AllowConnectedDevices=0`](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-connectivity),
-  which disables CDP after reboot.
-  Microsoft explicitly warns that related blocks can disrupt the Entra sign-in
-  option during Autopilot pre-provisioning. This is a post-enrollment pilot
-  candidate, not a claim of Entra-safe suppression. `[MSDOC]`
+  which disables CDP after reboot. Its documentation does **not** attach the
+  Autopilot Entra-sign-in warning to this control. `[MSDOC]`
+- The separate Autopilot warning applies when the
+  [Microsoft Account Sign-in Assistant (`wlidsvc`) is disabled](https://learn.microsoft.com/en-us/autopilot/pre-provision):
+  the Entra sign-in option may disappear and the user may be sent through
+  EULA/local-account setup. `[MSDOC]` The tool does not disable `wlidsvc`, but it
+  does block its outbound traffic and makes no Autopilot compatibility claim; it
+  refuses managed systems.
 - [Recall](https://learn.microsoft.com/en-us/windows/client-management/manage-recall)
   is a separate, opt-in local snapshot system in Microsoft's documentation:
   processing and storage are local, encrypted, and snapshots are not sent to
@@ -114,13 +122,16 @@ There is **no** consumer-facing Learn page titled "Global Device Identifier" exp
 
 ### What remains deliberately unclaimed
 
-The court reporting establishes GDID â†” URL/time/IP association, but does not name the
+The court reporting establishes GDID ↔ URL/time/IP association, but does not name the
 Windows component, telemetry endpoint, browser, or retention period. It therefore
 does not resolve SmartScreen vs DiagTrack vs another channel, Edge vs Chrome vs curl,
 or whether a DO *content* request carries GDID. Those need controlled, consented lab
 captures; the public [DO schema](https://learn.microsoft.com/en-us/windows/deployment/update/wufb-reports-schema-ucdostatus)
 only proves a `GlobalDeviceId` reporting snapshot.
 `[COURT]` `[MSDOC]` `[ASSESSED]`
+
+These remain important research questions, but they are not release gates for the
+GDID-only tool contract.
 
 ---
 
@@ -129,15 +140,39 @@ only proves a `GlobalDeviceId` reporting snapshot.
 Full pipeline, timing, and network I/O: **[`architecture.md`](./architecture.md)**.  
 Surface inventory: **[`surfaces.md`](./surfaces.md)**.
 
-One-liner: server-assigned 64-bit Device PUID (`g:<decimal>`), minted via `login.live.com` DeviceAdd (hardware sent as ceremony input), stored in IdentityCRL, announced by CDP into DDS, reported by DO as `GlobalDeviceId`. Local account still gets one (anonymous CDP path). VPN does not hide installâ†”Microsoft correlation.
+One-liner: server-assigned 64-bit Device PUID (`g:<decimal>`), minted via `login.live.com` DeviceAdd (hardware sent as ceremony input), stored in IdentityCRL, announced by CDP into DDS, reported by DO as `GlobalDeviceId`. Local account still gets one (anonymous CDP path). VPN does not hide install↔Microsoft correlation.
 
 Primary RE: [gdid-reversal](https://github.com/SmtimesIWndr/gdid-reversal). DeviceAdd traffic notes: [Windows-GDID-Changer](https://github.com/gd03gd031/Windows-GDID-Changer). Autopilot sibling: [Call4Cloud](https://call4cloud.nl/autopilot-profile-x-device-token-autopilot-marker/).
+
+### Tool hardening status
+
+The current script now integrates:
+
+- canonical dual-stack (`0.0.0.0` + `::`) hosts entries;
+- auto-resolving dynamic-keyword FQDN firewall configuration with explicit
+  hydration reporting, plus a separate outbound `wlidsvc` service rule;
+- a verified mint-path gate before mutation; and
+- canonical expanded wipe of known PUID stores/copies, with decoy behind an explicit
+  experimental option.
+
+Earlier `[LAB]` runs validate hosts-based DeviceAdd starvation and the expanded wipe
+bundle on a local-account Windows 11 25H2/build-26200 VM. They do not yet validate the
+current integrated rules for 24 hours/multiple reboots or an MSA-contaminated image.
+The advertised mutation scope is now explicitly 25H2/build 26200; 24H2 requires a
+separate closure matrix before support expands.
+
+`[LAB]` EXP-C3 mapped `Immersive\production\Property\<LID>` in the failed-rehydrate
+scenario and removed it with Token/LID/cache state in the successful bundle. Treat
+Property as a required member and high-confidence rehydrate store, not as the unique
+cause until a one-store-at-a-time ablation is run.
 
 ### Read your own
 
 ```powershell
-$hex = (Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties').LID
-"g:$([Convert]::ToUInt64($hex,16))"
+.\degdid.ps1 -Status
+
+# Explicit opt-in redaction for output you intend to share.
+.\degdid.ps1 -Status -Redact
 ```
 
 **Do not publish your value.**
@@ -162,13 +197,15 @@ $hex = (Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedPropertie
 See **[`open-questions.md`](./open-questions.md)** for the living backlog.
 
 Top gaps: exact raw response schema on current consumer/anonymous paths; exact
-URLâ†”GDID sensor from Stokes; browser/client differential lab; full device-token
-scope/claim map; and evidence of (or a bound on) server-side cross-reinstall joins.
+URL↔GDID sensor from Stokes; browser/client differential lab; full device-token
+scope/claim map; evidence of (or a bound on) server-side cross-reinstall joins; and
+C3 store ablation. Release-hardening gaps are tracked separately there.
 
 ---
 
 ## Project notes
 
-- North star: [`plan.md`](./plan.md) - research -> measure -> countermeasures -> tooling.
+- Historical phase plan: [`plan.md`](./plan.md). Current release gates live in
+  [`open-questions.md`](./open-questions.md).
 - Use this file as findings memory; update when local/lab evidence changes.
 - Do not commit real GDIDs, hostnames, usernames, or credentials - see `.gitignore` / redact experiment dumps.

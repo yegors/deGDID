@@ -2,6 +2,7 @@
 
 Date: 2026-07-11  
 State: expanded wipe empty LID + hosts registration blocks (`EXP-C3` clean)
+Status: **`[OBSERVED]` H5 partial - zero-pending scan + Defender + history; no controlled pending CU**
 
 ## Protocol
 
@@ -16,14 +17,16 @@ State: expanded wipe empty LID + hosts registration blocks (`EXP-C3` clean)
 |-------|--------|
 | Hosts block | Present (`login.live.com` → `0.0.0.0`) |
 | Pre LID | HKCU / `.DEFAULT` / SYSTEM **empty** |
-| WU search | **Works** — `SearchResultCount=0` (image already current) |
+| WU search | **Completed** — `SearchResultCount=0` (image already current; no pending CU exercised) |
 | Defender `Update-MpSignature` | **OK** under blocks |
 | WU history (same day) | Result=2 success for CU **KB5094126**, .NET **KB5087051**, Defender platform/intel, MSRT — includes installs from earlier blocked period (`EXP-C2` step 0) |
 | Post LID | Still **empty** (scan + Defender update did not mint) |
 
 ## Verdict
 
-**H5 PASS (practical):** Windows Update / Defender servicing paths work with DeviceAdd/DDS hosts blocked. No GDID mint from update activity in this run. Feature-update (enablement package) not attempted (optional long disposable snap).
+**H5 PARTIAL:** The Windows Update COM scan completed but found zero pending updates, Defender signature update succeeded, and WU history contained successful installs from the earlier blocked period. No GDID appeared during the scan + Defender observation window.
+
+This run did **not** perform a controlled pending cumulative-update download/install, so it does not close full Windows Update servicing compatibility. A pending CU remains optional in the closure matrix; a feature update (enablement package) was not attempted.
 
 ## Notes
 

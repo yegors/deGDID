@@ -4,14 +4,17 @@ Per-run notes from the Win11 25H2 lab. **Do not commit real GDIDs, tickets, host
 
 Public how-to: root [`README.md`](../../README.md) and [`degdid.ps1`](../../degdid.ps1).
 
-| ID | Summary |
-|----|---------|
-| [EXP-A1](./EXP-A1-offline-baseline.md) | Offline local OOBE -> no GDID |
-| [EXP-A4](./EXP-A4-blocks-before-online.md) | Hosts blocks before first online -> no mint (short soak) |
-| [EXP-B](./EXP-B-control-mint.md) | Unblock -> SYSTEM/`.DEFAULT` mint (~2 min); no MSA |
-| [EXP-C](./EXP-C-local-wipe-blocks.md) | Machine-hive wipe + blocks -> stayed empty |
-| [EXP-C2](./EXP-C2-continuity-drill.md) | HKCU mint continuity; naÃ¯ve wipe rehydrates |
-| [EXP-C3](./EXP-C3-hkcu-rehydrate-source.md) | Immersive Property is rehydrate store; expanded wipe works |
-| [EXP-D](./EXP-D-windows-update-blocks.md) | WU/Defender under blocks; LID stays empty |
-| [EXP-E](./EXP-E-breakage-catalog.md) | Breakage: desktop/WU OK; MSA path broken (expected) |
-| [EXP-F](./EXP-F-unblock-remint.md) | Decoy sticky short-term; eager remint = EXP-B |
+These notes use a **GDID-only completion gate**: a run may close only the local GDID/LID behavior it directly inspected. It does not close long-duration durability, bypass resistance, UI compatibility, servicing compatibility, or enforcement hardening unless that path was actually exercised. The pending closure work is designed in [EXP-G](./EXP-G-pending-closure-hardening-matrix.md).
+
+| ID | Evidence label | Summary |
+|----|----------------|---------|
+| [EXP-A1](./EXP-A1-offline-baseline.md) | Observed baseline | Offline local OOBE; no GDID in inspected stores |
+| [EXP-A4](./EXP-A4-blocks-before-online.md) | Observed - short soak | Blocks before first online; no mint during ~90-second window |
+| [EXP-B](./EXP-B-control-mint.md) | Observed - first-chance mint control | Unblock of never-minted image -> SYSTEM/`.DEFAULT` mint (~2 min); no MSA |
+| [EXP-C](./EXP-C-local-wipe-blocks.md) | Observed - continuous-block short window | Machine-hive-only contamination; wipe stayed empty through tested reboot/window |
+| [EXP-C2](./EXP-C2-continuity-drill.md) | Observed negative result | HKCU continuity; naïve LID-only wipe rehydrated |
+| [EXP-C3](./EXP-C3-hkcu-rehydrate-source.md) | Observed bundle - short window; ablation pending | Expanded bundle stayed empty under continuous blocks; Immersive Property remains required/high-confidence |
+| [EXP-D](./EXP-D-windows-update-blocks.md) | **H5 partial** | Zero-pending WU scan + Defender + history; no controlled pending CU |
+| [EXP-E](./EXP-E-breakage-catalog.md) | **Partial / inferred** | Named UI paths were not exercised |
+| [EXP-F](./EXP-F-unblock-remint.md) | Observed - short window | Decoy/wipe unblock behavior; **wipe-remint not proven**; EXP-B is first-chance mint only |
+| [EXP-G](./EXP-G-pending-closure-hardening-matrix.md) | **In progress / bounded interim evidence** | Immediate Protect and two reboots passed after three fail-closed defects were fixed; 24-hour/MSA/remaining matrix pending |

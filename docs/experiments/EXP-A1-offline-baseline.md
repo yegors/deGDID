@@ -3,6 +3,7 @@
 Date: 2026-07-09  
 VM: Hyper-V lab guest (Win11)  
 Guest account: local-only (no MSA); hostname redacted for publish  
+Status: **`[OBSERVED]` GDID-only offline baseline**
 
 ## Setup
 
@@ -29,9 +30,11 @@ Raw inspect dump not committed. Summary: all LID paths empty; TokenKeys=0.
 
 ## Verdict
 
-**`[OBSERVED]` H1 supported:** Offline install with local account and no network → **no Device PUID / GDID minted yet**, even though CDP/wlidsvc/DiagTrack are running.
+**`[OBSERVED]` H1 supported for this offline baseline:** Offline install with local account and no network → **no Device PUID / GDID was present in the inspected local stores**, even though CDP/wlidsvc/DiagTrack were running.
 
 Services can be up without a server-assigned install id. Mint appears gated on successful DeviceAdd (or equivalent) once network + `login.live.com` are reachable.
+
+The completion gate here is GDID-only: this run establishes the inspected offline state, not later online durability or general Windows compatibility.
 
 ## Next
 

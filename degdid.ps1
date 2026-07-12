@@ -1,44 +1,74 @@
 ﻿#Requires -Version 5.1
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  Check, wipe, decoy, and/or block Microsoft GDID (Global Device Identifier / Device PUID).
+  Inspect, block, wipe, decoy, or unblock Microsoft GDID state on a supported
+  unmanaged Windows 11 installation with one loaded target human-profile hive.
 
 .DESCRIPTION
-  Public entry point for degdid. Run elevated PowerShell.
+  degdid resolves the active interactive user explicitly and addresses that
+  user's loaded HKEY_USERS hive. Mutating actions refuse domain-joined,
+  Entra-joined, MDM-enrolled, multiple-loaded-human-profile, non-Windows-11, or
+  unloaded-target-hive systems.
 
-  Recommended for a contaminated PC that should stop carrying a live install id:
-    .\degdid.ps1 -Protect
-
-  That applies registration blocks FIRST, then performs an expanded local wipe
-  (LID + Immersive Property rehydrate blobs + device tickets + related caches).
+  Protect refreshes a canonical dual-stack hosts region and Windows Firewall
+  dynamic-keyword FQDN rules, verifies the mint path is blocked, then performs
+  the identity mutation. Wipe is the canonical identity action. Decoy remains
+  experimental.
 
 .PARAMETER Status
-  Show whether a GDID/LID is present and whether registration blocks are active.
+  Report the environment, target user, hosts, firewall, mint path, active GDID
+  stores, residual caches, and one machine-readable verdict. This is the
+  default action and may run on unsupported systems.
 
 .PARAMETER Wipe
-  Delete local GDID copies (expanded wipe). Prefer -Protect instead of Wipe alone while online.
+  Clear target-user, SYSTEM, and .DEFAULT GDID state. Existing registration
+  blocks must independently verify before the wipe can begin.
 
 .PARAMETER Decoy
-  Write a random local 0018-shaped LID (not server-issued). Prefer with -Protect / -Block.
+  Experimental. Clear old GDID state and install one generated 0018-shaped
+  local decoy consistently. Existing registration blocks must verify first.
 
 .PARAMETER Block
-  Block DeviceAdd / DDS / activity registration hosts (hosts file + outbound firewall IPs).
+  Refresh the canonical IPv4/IPv6 hosts region and dynamic-keyword outbound
+  firewall rule, then independently verify the mint-critical path.
 
 .PARAMETER Unblock
-  Remove degdid hosts marker and firewall rules.
+  Remove a valid managed hosts region, managed dynamic keywords, and current
+  or legacy degdid firewall rules. A malformed or duplicate hosts region is
+  never guessed at or rewritten.
 
 .PARAMETER Protect
-  Block, then Wipe (default) or Decoy if -UseDecoy is also set. Preferred one-shot.
+  Apply and verify registration blocks, then Wipe by default or Decoy when
+  UseDecoy is supplied. Identity state is not touched if the block gate fails.
+
+.PARAMETER UseDecoy
+  Use the experimental Decoy mutation with Protect instead of Wipe.
 
 .PARAMETER DryRun
-  Print actions without changing the system.
+  Inspect and report planned work without changing hosts, firewall, services,
+  registry, or files. DryRun never claims that planned blocks are active.
+
+.PARAMETER ShowIdentifier
+  Backward-compatible no-op: Status now displays complete identifiers by default.
+
+.PARAMETER Redact
+  Hash account, profile, SID, LID, and GDID values for output intended to be
+  shared. Redaction is opt-in.
+
+.PARAMETER Json
+  Emit Status as JSON.
+
+.PARAMETER InternalNoExit
+  Test seam: load functions without invoking an action or exiting the caller.
 
 .NOTES
-  Limits: does not erase Microsoft server-side history of an old GDID; does not stop
-  all telemetry; breaks MSA / Store sign-in / Phone Link style features that need
-  the blocked endpoints. Windows Update is intended to keep working.
-  Lab evidence: docs/experiments/ (Win11 25H2).
+  Exit codes: 0 success; 1 unexpected/admin failure; 2 unsupported mutation;
+  3 block verification failure; 4 safe-hosts refusal; 5 wipe/postcondition
+  failure; 6 target-user failure.
+
+  This does not erase Microsoft server-side history or stop every telemetry
+  plane. Blocking login.live.com intentionally breaks or degrades MSA, Store,
+  Xbox, OneDrive sign-in, Phone Link, and related identity features.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Status')]
 param(
@@ -63,22 +93,40 @@ param(
   [Parameter(ParameterSetName = 'Protect')]
   [switch]$UseDecoy,
 
-  [switch]$DryRun
+  [Parameter(ParameterSetName = 'Status')]
+  [switch]$ShowIdentifier,
+
+  [Parameter(ParameterSetName = 'Status')]
+  [switch]$Redact,
+
+  [Parameter(ParameterSetName = 'Status')]
+  [switch]$Json,
+
+  [switch]$DryRun,
+
+  [Parameter(DontShow = $true)]
+  [switch]$InternalNoExit
 )
 
-$ErrorActionPreference = 'Continue'
+$script:MarkerBegin = '# BEGIN degdid-registration-block'
+$script:MarkerEnd = '# END degdid-registration-block'
+$script:HostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+$script:HostsMutexName = 'Global\degdid-hosts-v2'
+$script:RulePrefix = 'degdid-block-'
+$script:FirewallRuleName = 'degdid-block-fqdn-v2'
+$script:FirewallRuleDisplayName = 'degdid-block-fqdn-v2'
+$script:MintServiceRuleName = 'degdid-block-wlidsvc-v2'
+$script:MintServiceRuleDisplayName = 'degdid-block-wlidsvc-v2'
+$script:StagingMintServiceRuleName = 'degdid-stage-wlidsvc-v2'
+$script:StagingMintServiceRuleDisplayName = 'degdid-stage-wlidsvc-v2'
+$script:FirewallGroup = 'degdid managed registration blocks'
+$script:MintHost = 'login.live.com'
+$script:SettleSeconds = 12
+$script:DegdidExitCode = 0
+$script:SupportedBuild = 26200
+$script:SupportedDisplayVersion = '25H2'
 
-# Default to Status when no action switch is set
-if (-not ($Status -or $Wipe -or $Decoy -or $Block -or $Unblock -or $Protect)) {
-  $Status = $true
-}
-
-$MarkerBegin = '# BEGIN degdid-registration-block'
-$MarkerEnd   = '# END degdid-registration-block'
-$HostsPath   = "$env:SystemRoot\System32\drivers\etc\hosts"
-$RulePrefix  = 'degdid-block-'
-
-$BlockHosts = @(
+$script:BlockHosts = @(
   'login.live.com',
   'account.live.com',
   'cs.dds.microsoft.com',
@@ -92,278 +140,4000 @@ $BlockHosts = @(
   'edge.activity.windows.com'
 )
 
-$LidPaths = @(
-  'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties',
-  'Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties',
-  'Registry::HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL\ExtendedProperties'
-)
+function Test-RealPuid {
+  param([AllowNull()][string]$Value)
 
-function Test-LooksOnline {
-  $nics = @(Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
-  if (-not $nics) { return $false }
-  $routes = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue |
-    Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' })
-  return [bool]$routes
+  return [bool]($Value -and $Value -match '^0018[0-9A-Fa-f]{12}$')
 }
 
-function ConvertTo-Gdid([string]$lid) {
-  if (-not $lid) { return $null }
-  try { return "g:$([Convert]::ToUInt64($lid, 16))" } catch { return $null }
+function ConvertTo-Gdid {
+  param([AllowNull()][string]$Lid)
+
+  if (-not $Lid -or $Lid -notmatch '^[0-9A-Fa-f]{16}$') {
+    return $null
+  }
+
+  try {
+    return 'g:{0}' -f [Convert]::ToUInt64($Lid, 16)
+  } catch {
+    return $null
+  }
 }
 
-function Get-LidAt([string]$Path) {
-  if (-not (Test-Path $Path)) { return $null }
-  try { return (Get-ItemProperty -Path $Path -EA Stop).LID } catch { return $null }
+function Get-Sha256Hex {
+  param([AllowNull()][string]$Value)
+
+  if ($null -eq $Value) {
+    return $null
+  }
+
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+    return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+  } finally {
+    $sha.Dispose()
+  }
 }
 
-function Ensure-Key([string]$Path) {
-  if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+function Format-GdidIdentifier {
+  param(
+    [AllowNull()][string]$Value,
+    [switch]$Show
+  )
+
+  if (-not $Value) {
+    return '(none)'
+  }
+  if ($Show) {
+    return $Value
+  }
+
+  if (Test-RealPuid $Value) {
+    $hash = (Get-Sha256Hex $Value.ToUpperInvariant()).Substring(0, 8)
+    return '{0}...#{1}' -f $Value.Substring(0, 4).ToUpperInvariant(), $hash
+  }
+  $hash = (Get-Sha256Hex $Value).Substring(0, 8)
+  return '<present>#{0}' -f $hash
 }
 
-function Test-HostsBlockPresent {
-  if (-not (Test-Path $HostsPath)) { return $false }
-  return ((Get-Content $HostsPath -EA SilentlyContinue) -contains $MarkerBegin)
+function Format-PrivateValue {
+  param(
+    [AllowNull()][string]$Value,
+    [switch]$Show,
+    [string]$Prefix = '<redacted>'
+  )
+
+  if (-not $Value) {
+    return '(none)'
+  }
+  if ($Show) {
+    return $Value
+  }
+  return '{0}#{1}' -f $Prefix, (Get-Sha256Hex $Value).Substring(0, 8)
 }
 
-function Get-ImmersivePropertyCount {
-  $prop = 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property'
-  if (-not (Test-Path $prop)) { return 0 }
-  $pp = Get-ItemProperty $prop -EA SilentlyContinue
-  return @($pp.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' }).Count
+function Get-EmbeddedRealPuids {
+  param([AllowNull()][string]$Value)
+
+  if (-not $Value) {
+    return @()
+  }
+
+  $found = @(
+    [regex]::Matches(
+      $Value,
+      '(?i)(?<![0-9a-f])0018[0-9a-f]{12}(?![0-9a-f])'
+    ) | ForEach-Object { $_.Value.ToUpperInvariant() }
+  )
+  return @($found | Select-Object -Unique)
 }
 
 function New-DecoyLid {
   $bytes = New-Object byte[] 6
-  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-  $hex = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ''
-  return '0018' + $hex
-}
-
-function Clear-ImmersiveProperty {
-  $prop = 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property'
-  if (-not (Test-Path $prop)) { return }
-  $pp = Get-ItemProperty $prop -EA SilentlyContinue
-  foreach ($n in @($pp.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' })) {
-    if ($DryRun) { Write-Output "DryRun clear Immersive Property $($n.Name)"; continue }
-    Remove-ItemProperty -Path $prop -Name $n.Name -EA SilentlyContinue
-    Write-Output "Cleared Immersive Property $($n.Name.Substring(0, [Math]::Min(8, $n.Name.Length)))..."
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($bytes)
+  } finally {
+    $rng.Dispose()
   }
+  return '0018' + (($bytes | ForEach-Object { $_.ToString('X2') }) -join '')
 }
 
-function Clear-TokenDeviceFields {
+function Get-CanonicalHostsRegionLines {
+  param([string[]]$Hosts = $script:BlockHosts)
+
+  $lines = New-Object System.Collections.Generic.List[string]
+  [void]$lines.Add($script:MarkerBegin)
+  foreach ($hostName in $Hosts) {
+    [void]$lines.Add(('0.0.0.0 {0}' -f $hostName.ToLowerInvariant()))
+    [void]$lines.Add((':: {0}' -f $hostName.ToLowerInvariant()))
+  }
+  [void]$lines.Add($script:MarkerEnd)
+  return $lines.ToArray()
+}
+
+function Get-HostsLineRecords {
+  param([AllowEmptyString()][string]$Text)
+
+  $records = New-Object System.Collections.Generic.List[object]
+  $position = 0
+  $index = 0
+
+  while ($position -lt $Text.Length) {
+    $start = $position
+    while (
+      $position -lt $Text.Length -and
+      $Text[$position] -ne "`r" -and
+      $Text[$position] -ne "`n"
+    ) {
+      $position++
+    }
+
+    $contentEnd = $position
+    $newLine = ''
+    if ($position -lt $Text.Length) {
+      if (
+        $Text[$position] -eq "`r" -and
+        ($position + 1) -lt $Text.Length -and
+        $Text[$position + 1] -eq "`n"
+      ) {
+        $newLine = "`r`n"
+        $position += 2
+      } else {
+        $newLine = [string]$Text[$position]
+        $position++
+      }
+    }
+
+    [void]$records.Add([pscustomobject]@{
+      Index = $index
+      Start = $start
+      ContentEnd = $contentEnd
+      End = $position
+      Content = $Text.Substring($start, $contentEnd - $start)
+      NewLine = $newLine
+    })
+    $index++
+  }
+
+  return $records.ToArray()
+}
+
+function Get-HostsDocumentState {
   param(
-    [string]$NewDeviceId
+    [AllowEmptyString()][string]$Text,
+    [string[]]$Hosts = $script:BlockHosts
   )
-  $setId = $PSBoundParameters.ContainsKey('NewDeviceId')
-  $tok = 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token'
-  if (-not (Test-Path $tok)) { return }
-  Get-ChildItem $tok -EA SilentlyContinue | ForEach-Object {
-    if ($DryRun) {
-      Write-Output "DryRun Token $($_.PSChildName)"
-      return
+
+  $records = @(Get-HostsLineRecords -Text $Text)
+  $beginLikeRecords = @(
+    $records |
+      Where-Object {
+        $_.Content -match '(?i)^\s*#\s*BEGIN\s+degdid-registration-block\b'
+      }
+  )
+  $endLikeRecords = @(
+    $records |
+      Where-Object {
+        $_.Content -match '(?i)^\s*#\s*END\s+degdid-registration-block\b'
+      }
+  )
+  $beginRecords = @(
+    $records | Where-Object { $_.Content -ceq $script:MarkerBegin }
+  )
+  $endRecords = @(
+    $records | Where-Object { $_.Content -ceq $script:MarkerEnd }
+  )
+
+  $preferredNewLine = "`r`n"
+  foreach ($record in $records) {
+    if ($record.NewLine) {
+      $preferredNewLine = $record.NewLine
+      break
     }
-    Remove-ItemProperty -Path $_.PSPath -Name DeviceTicket -EA SilentlyContinue
-    if ($setId) {
-      New-ItemProperty -Path $_.PSPath -Name DeviceId -Value $NewDeviceId -PropertyType String -Force | Out-Null
-      Write-Output "Set Token DeviceId $($_.PSChildName)"
+  }
+
+  $endsWithNewLine = $false
+  if ($records.Count -gt 0) {
+    $endsWithNewLine = [bool]$records[$records.Count - 1].NewLine
+  }
+
+  $state = 'Absent'
+  $beginIndex = -1
+  $endIndex = -1
+  $regionStart = -1
+  $regionEnd = -1
+  $scanRecords = @()
+  $canonical = $false
+
+  if ($beginRecords.Count -eq 0 -and $endRecords.Count -eq 0) {
+    if ($beginLikeRecords.Count -gt 0 -or $endLikeRecords.Count -gt 0) {
+      $state = 'Malformed'
+      $scanRecords = $records
     } else {
-      Remove-ItemProperty -Path $_.PSPath -Name DeviceId -EA SilentlyContinue
-      Write-Output "Cleared Token DeviceId/DeviceTicket $($_.PSChildName)"
+      $state = 'Absent'
     }
-  }
-}
-
-function Clear-AuxCaches {
-  if (-not $DryRun) {
-    cmdkey /delete:'WindowsLive:target=virtualapp/didlogical' 2>$null | Out-Null
-    Write-Output 'Removed cmdkey WindowsLive didlogical (if present)'
+  } elseif ($beginRecords.Count -gt 1 -or $endRecords.Count -gt 1) {
+    $state = 'Duplicate'
+    $scanRecords = $records
+  } elseif ($beginRecords.Count -ne 1 -or $endRecords.Count -ne 1) {
+    $state = 'Malformed'
+    $scanRecords = $records
   } else {
-    Write-Output 'DryRun cmdkey delete didlogical'
-  }
-  $tb = Join-Path $env:LOCALAPPDATA 'Microsoft\TokenBroker\Cache'
-  if (Test-Path $tb) {
-    if ($DryRun) { Write-Output "DryRun clear $tb" }
-    else {
-      Get-ChildItem $tb -Force -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue
-      Write-Output "Cleared TokenBroker cache"
-    }
-  }
-  $cdp = Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform'
-  if (Test-Path $cdp) {
-    if ($DryRun) { Write-Output "DryRun clear $cdp" }
-    else {
-      Get-ChildItem $cdp -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue
-      Write-Output "Cleared ConnectedDevicesPlatform folder"
-    }
-  }
-}
-
-function Invoke-Wipe {
-  Write-Output 'Wiping LID + Immersive Property + Token device fields + caches...'
-  foreach ($p in $LidPaths) {
-    if (-not (Test-Path $p)) { continue }
-    if ($DryRun) { Write-Output "DryRun clear LID $p"; continue }
-    Remove-ItemProperty -Path $p -Name LID -EA SilentlyContinue
-    Write-Output "Cleared LID $p"
-  }
-  Clear-ImmersiveProperty
-  Clear-TokenDeviceFields
-  Clear-AuxCaches
-}
-
-function Invoke-Decoy {
-  $newLid = New-DecoyLid
-  Write-Output "DecoyLid=$newLid Gdid=$(ConvertTo-Gdid $newLid)"
-  Clear-ImmersiveProperty
-  foreach ($p in $LidPaths) {
-    if ($DryRun) { Write-Output "DryRun set LID $p"; continue }
-    Ensure-Key $p
-    New-ItemProperty -Path $p -Name LID -Value $newLid -PropertyType String -Force | Out-Null
-    Write-Output "Set LID $p"
-  }
-  Clear-TokenDeviceFields -NewDeviceId $newLid
-  Clear-AuxCaches
-}
-
-function Invoke-Block {
-  $present = Test-HostsBlockPresent
-  if ($present) {
-    Write-Output 'Hosts block already present; refreshing firewall rules...'
-  } else {
-    $block = @('', $MarkerBegin) + ($BlockHosts | ForEach-Object { "0.0.0.0 $_" }) + @($MarkerEnd, '')
-    if ($DryRun) {
-      Write-Output 'DryRun would append hosts:'
-      $block | Write-Output
+    $beginIndex = [int]$beginRecords[0].Index
+    $endIndex = [int]$endRecords[0].Index
+    if ($beginIndex -ge $endIndex) {
+      $state = 'Malformed'
+      $scanRecords = $records
     } else {
-      Add-Content -Path $HostsPath -Value ($block -join "`r`n") -Encoding ASCII
-      Write-Output 'Hosts registration block appended.'
+      $regionStart = [int]$records[$beginIndex].Start
+      $regionEnd = [int]$records[$endIndex].End
+      if ($endIndex -gt ($beginIndex + 1)) {
+        $scanRecords = @($records[($beginIndex + 1)..($endIndex - 1)])
+      }
+
+      $expected = @(
+        (Get-CanonicalHostsRegionLines -Hosts $Hosts)[1..((2 * $Hosts.Count))]
+      )
+      $actual = @($scanRecords | ForEach-Object { $_.Content })
+      $ownedContent = $true
+      foreach ($line in $actual) {
+        if (
+          $line -ne '' -and
+          $line -notmatch '^\s*(0\.0\.0\.0|::)\s+[A-Za-z0-9.-]+\s*$'
+        ) {
+          $ownedContent = $false
+          break
+        }
+      }
+      if (-not $ownedContent) {
+        $state = 'Malformed'
+        $canonical = $false
+      }
+      $canonical = $actual.Count -eq $expected.Count
+      if ($canonical) {
+        for ($i = 0; $i -lt $expected.Count; $i++) {
+          if ($actual[$i] -cne $expected[$i]) {
+            $canonical = $false
+            break
+          }
+        }
+      }
+      # A structurally paired legacy/stale region is safe to replace or remove
+      # only when every interior line has a degdid-owned sink-entry shape.
+      if ($ownedContent) {
+        $state = 'Valid'
+      }
+    }
+  }
+
+  $ipv4Names = New-Object System.Collections.Generic.List[string]
+  $ipv6Names = New-Object System.Collections.Generic.List[string]
+  foreach ($record in $scanRecords) {
+    if ($record.Content -match '^\s*(0\.0\.0\.0|::)\s+([^\s#]+)\s*$') {
+      $address = $matches[1]
+      $name = $matches[2].ToLowerInvariant()
+      if ($Hosts -contains $name) {
+        if ($address -eq '0.0.0.0' -and -not $ipv4Names.Contains($name)) {
+          [void]$ipv4Names.Add($name)
+        }
+        if ($address -eq '::' -and -not $ipv6Names.Contains($name)) {
+          [void]$ipv6Names.Add($name)
+        }
+      }
+    }
+  }
+
+  $missingIPv4 = @($Hosts | Where-Object { -not $ipv4Names.Contains($_) })
+  $missingIPv6 = @($Hosts | Where-Object { -not $ipv6Names.Contains($_) })
+
+  return [pscustomobject]@{
+    State = $state
+    BeginCount = $beginRecords.Count
+    EndCount = $endRecords.Count
+    BeginIndex = $beginIndex
+    EndIndex = $endIndex
+    RegionStart = $regionStart
+    RegionEnd = $regionEnd
+    Canonical = $canonical
+    Records = $records
+    PreferredNewLine = $preferredNewLine
+    EndsWithNewLine = $endsWithNewLine
+    IPv4Names = $ipv4Names.ToArray()
+    IPv6Names = $ipv6Names.ToArray()
+    IPv4Count = $ipv4Names.Count
+    IPv6Count = $ipv6Names.Count
+    MissingIPv4 = $missingIPv4
+    MissingIPv6 = $missingIPv6
+  }
+}
+
+function Set-GdidHostsRegionText {
+  param(
+    [AllowEmptyString()][string]$Text,
+    [string[]]$Hosts = $script:BlockHosts
+  )
+
+  $state = Get-HostsDocumentState -Text $Text -Hosts $Hosts
+  if ($state.State -eq 'Malformed' -or $state.State -eq 'Duplicate') {
+    throw [System.IO.InvalidDataException]::new(
+      'Managed hosts region is {0}; refusing to guess.' -f $state.State
+    )
+  }
+
+  $lines = @(Get-CanonicalHostsRegionLines -Hosts $Hosts)
+  $newLine = $state.PreferredNewLine
+
+  if ($state.State -eq 'Valid') {
+    $beginRecord = $state.Records[$state.BeginIndex]
+    $endRecord = $state.Records[$state.EndIndex]
+    if ($beginRecord.NewLine) {
+      $newLine = $beginRecord.NewLine
+    }
+    $replacement = $lines -join $newLine
+    if ($endRecord.NewLine) {
+      $replacement += $endRecord.NewLine
+    }
+    return (
+      $Text.Substring(0, $state.RegionStart) +
+      $replacement +
+      $Text.Substring($state.RegionEnd)
+    )
+  }
+
+  $region = $lines -join $newLine
+  if ($Text.Length -eq 0) {
+    return $region + $newLine
+  }
+  if ($state.EndsWithNewLine) {
+    return $Text + $region + $newLine
+  }
+  return $Text + $newLine + $region
+}
+
+function Remove-GdidHostsRegionText {
+  param(
+    [AllowEmptyString()][string]$Text,
+    [string[]]$Hosts = $script:BlockHosts
+  )
+
+  $state = Get-HostsDocumentState -Text $Text -Hosts $Hosts
+  if ($state.State -eq 'Absent') {
+    return $Text
+  }
+  if ($state.State -ne 'Valid') {
+    throw [System.IO.InvalidDataException]::new(
+      'Managed hosts region is {0}; refusing to guess.' -f $state.State
+    )
+  }
+
+  return (
+    $Text.Substring(0, $state.RegionStart) +
+    $Text.Substring($state.RegionEnd)
+  )
+}
+
+function Test-ByteArrayEqual {
+  param(
+    [byte[]]$Left,
+    [byte[]]$Right
+  )
+
+  if ($Left.Length -ne $Right.Length) {
+    return $false
+  }
+  for ($i = 0; $i -lt $Left.Length; $i++) {
+    if ($Left[$i] -ne $Right[$i]) {
+      return $false
+    }
+  }
+  return $true
+}
+
+function ConvertFrom-HostsBytes {
+  param([byte[]]$Bytes)
+
+  $bomLength = 0
+  $encodingName = ''
+  $encoding = $null
+
+  if (
+    $Bytes.Length -ge 4 -and
+    $Bytes[0] -eq 0x00 -and $Bytes[1] -eq 0x00 -and
+    $Bytes[2] -eq 0xFE -and $Bytes[3] -eq 0xFF
+  ) {
+    $bomLength = 4
+    $encodingName = 'utf-32BE'
+    $encoding = [System.Text.UTF32Encoding]::new($true, $false, $true)
+  } elseif (
+    $Bytes.Length -ge 4 -and
+    $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE -and
+    $Bytes[2] -eq 0x00 -and $Bytes[3] -eq 0x00
+  ) {
+    $bomLength = 4
+    $encodingName = 'utf-32LE'
+    $encoding = [System.Text.UTF32Encoding]::new($false, $false, $true)
+  } elseif (
+    $Bytes.Length -ge 3 -and
+    $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF
+  ) {
+    $bomLength = 3
+    $encodingName = 'utf-8'
+    $encoding = [System.Text.UTF8Encoding]::new($false, $true)
+  } elseif (
+    $Bytes.Length -ge 2 -and
+    $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE
+  ) {
+    $bomLength = 2
+    $encodingName = 'utf-16LE'
+    $encoding = [System.Text.UnicodeEncoding]::new($false, $false, $true)
+  } elseif (
+    $Bytes.Length -ge 2 -and
+    $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF
+  ) {
+    $bomLength = 2
+    $encodingName = 'utf-16BE'
+    $encoding = [System.Text.UnicodeEncoding]::new($true, $false, $true)
+  }
+
+  $payloadLength = $Bytes.Length - $bomLength
+  $payload = New-Object byte[] $payloadLength
+  if ($payloadLength -gt 0) {
+    [Array]::Copy($Bytes, $bomLength, $payload, 0, $payloadLength)
+  }
+
+  if ($null -eq $encoding -and $payload.Length -ge 4) {
+    $nullRatios = @()
+    for ($offset = 0; $offset -lt 4; $offset++) {
+      $sampleCount = 0
+      $nullCount = 0
+      for ($i = $offset; $i -lt $payload.Length; $i += 4) {
+        $sampleCount++
+        if ($payload[$i] -eq 0) {
+          $nullCount++
+        }
+      }
+      $nullRatios += $(if ($sampleCount -gt 0) {
+        [double]$nullCount / [double]$sampleCount
+      } else {
+        0.0
+      })
+    }
+
+    if (
+      $payload.Length % 4 -eq 0 -and
+      $nullRatios[0] -lt 0.40 -and
+      $nullRatios[1] -gt 0.60 -and
+      $nullRatios[2] -gt 0.60 -and
+      $nullRatios[3] -gt 0.60
+    ) {
+      $encoding = [System.Text.UTF32Encoding]::new($false, $false, $true)
+      $encodingName = 'utf-32LE-no-bom'
+    } elseif (
+      $payload.Length % 4 -eq 0 -and
+      $nullRatios[0] -gt 0.60 -and
+      $nullRatios[1] -gt 0.60 -and
+      $nullRatios[2] -gt 0.60 -and
+      $nullRatios[3] -lt 0.40
+    ) {
+      $encoding = [System.Text.UTF32Encoding]::new($true, $false, $true)
+      $encodingName = 'utf-32BE-no-bom'
+    }
+  }
+
+  if (
+    $null -eq $encoding -and
+    $payload.Length -ge 2 -and
+    $payload.Length % 2 -eq 0
+  ) {
+    $evenNulls = 0
+    $oddNulls = 0
+    $pairs = [int]($payload.Length / 2)
+    for ($i = 0; $i -lt $payload.Length; $i += 2) {
+      if ($payload[$i] -eq 0) {
+        $evenNulls++
+      }
+      if ($payload[$i + 1] -eq 0) {
+        $oddNulls++
+      }
+    }
+    $evenRatio = [double]$evenNulls / [double]$pairs
+    $oddRatio = [double]$oddNulls / [double]$pairs
+    if ($oddRatio -gt 0.60 -and $evenRatio -lt 0.30) {
+      $encoding = [System.Text.UnicodeEncoding]::new($false, $false, $true)
+      $encodingName = 'utf-16LE-no-bom'
+    } elseif ($evenRatio -gt 0.60 -and $oddRatio -lt 0.30) {
+      $encoding = [System.Text.UnicodeEncoding]::new($true, $false, $true)
+      $encodingName = 'utf-16BE-no-bom'
+    }
+  }
+
+  if ($null -eq $encoding) {
+    $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    try {
+      $utf8Text = $utf8.GetString($payload)
+      if (Test-ByteArrayEqual -Left $payload -Right $utf8.GetBytes($utf8Text)) {
+        $encoding = $utf8
+        $encodingName = 'utf-8-no-bom'
+      }
+    } catch {
+      $encoding = $null
+    }
+  }
+
+  if ($null -eq $encoding) {
+    $encoding = [System.Text.Encoding]::GetEncoding(
+      [System.Text.Encoding]::Default.CodePage,
+      [System.Text.EncoderExceptionFallback]::new(),
+      [System.Text.DecoderExceptionFallback]::new()
+    )
+    $encodingName = 'ansi-{0}' -f $encoding.CodePage
+  }
+
+  try {
+    $text = $encoding.GetString($payload)
+    $roundTrip = $encoding.GetBytes($text)
+  } catch {
+    throw [System.IO.InvalidDataException]::new(
+      'Hosts encoding could not be decoded losslessly.',
+      $_.Exception
+    )
+  }
+
+  if (-not (Test-ByteArrayEqual -Left $payload -Right $roundTrip)) {
+    throw [System.IO.InvalidDataException]::new(
+      'Hosts encoding did not round-trip losslessly.'
+    )
+  }
+
+  $bom = New-Object byte[] $bomLength
+  if ($bomLength -gt 0) {
+    [Array]::Copy($Bytes, 0, $bom, 0, $bomLength)
+  }
+
+  return [pscustomobject]@{
+    Text = $text
+    Encoding = $encoding
+    EncodingName = $encodingName
+    Bom = $bom
+    BomLength = $bomLength
+  }
+}
+
+function ConvertTo-HostsBytes {
+  param(
+    [AllowEmptyString()][string]$Text,
+    [System.Text.Encoding]$Encoding,
+    [byte[]]$Bom
+  )
+
+  $payload = $Encoding.GetBytes($Text)
+  $result = New-Object byte[] ($Bom.Length + $payload.Length)
+  if ($Bom.Length -gt 0) {
+    [Array]::Copy($Bom, 0, $result, 0, $Bom.Length)
+  }
+  if ($payload.Length -gt 0) {
+    [Array]::Copy($payload, 0, $result, $Bom.Length, $payload.Length)
+  }
+  return ,$result
+}
+
+function Read-HostsDocument {
+  param([string]$Path = $script:HostsPath)
+
+  if (-not [System.IO.File]::Exists($Path)) {
+    throw [System.IO.FileNotFoundException]::new('Hosts file does not exist.', $Path)
+  }
+  if (
+    ([System.IO.File]::GetAttributes($Path) -band
+      [System.IO.FileAttributes]::ReparsePoint) -ne 0
+  ) {
+    throw [System.IO.InvalidDataException]::new(
+      'Hosts file is a reparse point; refusing to follow it.'
+    )
+  }
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $decoded = ConvertFrom-HostsBytes -Bytes $bytes
+  $state = Get-HostsDocumentState -Text $decoded.Text
+  return [pscustomobject]@{
+    Path = $Path
+    Bytes = $bytes
+    Text = $decoded.Text
+    Encoding = $decoded.Encoding
+    EncodingName = $decoded.EncodingName
+    Bom = $decoded.Bom
+    State = $state
+  }
+}
+
+function Write-HostsDocumentAtomic {
+  param(
+    [string]$Path,
+    [byte[]]$Bytes,
+    [byte[]]$ExpectedOriginalBytes
+  )
+
+  $directory = [System.IO.Path]::GetDirectoryName($Path)
+  $leaf = [System.IO.Path]::GetFileName($Path)
+  $backup = Join-Path $directory (
+    '{0}.degdid.{1}.{2}.bak' -f
+    $leaf,
+    (Get-Date -Format 'yyyyMMddHHmmssfff'),
+    [Guid]::NewGuid().ToString('N')
+  )
+  $temporary = Join-Path $directory (
+    '.{0}.degdid.{1}.tmp' -f $leaf, [Guid]::NewGuid().ToString('N')
+  )
+
+  try {
+    $currentBytes = [System.IO.File]::ReadAllBytes($Path)
+    if (-not (Test-ByteArrayEqual -Left $currentBytes -Right $ExpectedOriginalBytes)) {
+      throw [System.IO.IOException]::new(
+        'Hosts changed after it was read; refusing to overwrite concurrent edits.'
+      )
+    }
+    [System.IO.File]::WriteAllBytes($temporary, $Bytes)
+    [System.IO.File]::Replace($temporary, $Path, $backup, $false)
+  } finally {
+    if ([System.IO.File]::Exists($temporary)) {
+      [System.IO.File]::Delete($temporary)
+    }
+  }
+}
+
+function Invoke-WithHostsMutex {
+  param([scriptblock]$Action)
+
+  $mutex = [System.Threading.Mutex]::new($false, $script:HostsMutexName)
+  $acquired = $false
+  try {
+    try {
+      $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds(15))
+    } catch [System.Threading.AbandonedMutexException] {
+      $acquired = $true
+    }
+    if (-not $acquired) {
+      throw [System.TimeoutException]::new('Timed out waiting for the hosts mutex.')
+    }
+    return & $Action
+  } finally {
+    if ($acquired) {
+      [void]$mutex.ReleaseMutex()
+    }
+    $mutex.Dispose()
+  }
+}
+
+function Invoke-HostsDocumentChange {
+  param(
+    [ValidateSet('Block', 'Unblock')]
+    [string]$Mode,
+    [switch]$DryRun
+  )
+
+  $operation = {
+    $document = Read-HostsDocument
+    if ($document.State.State -eq 'Malformed' -or $document.State.State -eq 'Duplicate') {
+      throw [System.IO.InvalidDataException]::new(
+        'Managed hosts region is {0}; refusing to rewrite hosts.' -f
+        $document.State.State
+      )
+    }
+
+    if ($Mode -eq 'Block') {
+      $newText = Set-GdidHostsRegionText -Text $document.Text
+    } else {
+      $newText = Remove-GdidHostsRegionText -Text $document.Text
+    }
+    $newState = Get-HostsDocumentState -Text $newText
+    $changed = $newText -cne $document.Text
+
+    if (-not $DryRun) {
+      if ($changed) {
+        $bytes = ConvertTo-HostsBytes `
+          -Text $newText `
+          -Encoding $document.Encoding `
+          -Bom $document.Bom
+        Write-HostsDocumentAtomic `
+          -Path $document.Path `
+          -Bytes $bytes `
+          -ExpectedOriginalBytes $document.Bytes
+      }
+    }
+
+    return [pscustomobject]@{
+      Mode = $Mode
+      DryRun = [bool]$DryRun
+      Changed = $changed
+      StateBefore = $document.State.State
+      StateAfter = $newState.State
+      Encoding = $document.EncodingName
     }
   }
 
   if ($DryRun) {
-    Write-Output 'DryRun would refresh outbound firewall block rules for resolved IPs.'
-    return
+    return & $operation
+  }
+  return Invoke-WithHostsMutex -Action $operation
+}
+
+function Get-DynamicKeywordId {
+  param([string]$HostName)
+
+  $seed = 'degdid-fqdn-v2:' + $HostName.ToLowerInvariant()
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($seed))
+  } finally {
+    $sha.Dispose()
   }
 
-  ipconfig /flushdns | Out-Null
-  $dnsServers = @('1.1.1.1', '8.8.8.8')
-  foreach ($h in $BlockHosts) {
-    $ruleName = "$RulePrefix$h"
-    Get-NetFirewallRule -DisplayName $ruleName -EA SilentlyContinue | Remove-NetFirewallRule -EA SilentlyContinue
-    $ips = @()
-    foreach ($dns in $dnsServers) {
-      try {
-        $job = Start-Job -ScriptBlock {
-          param($name, $server)
-          Resolve-DnsName $name -Type A -Server $server -EA Stop |
-            Where-Object { $_.IPAddress -and $_.IPAddress -ne '0.0.0.0' } |
-            Select-Object -ExpandProperty IPAddress -Unique
-        } -ArgumentList $h, $dns
-        if (Wait-Job $job -Timeout 5) { $ips = @(Receive-Job $job) }
-        Remove-Job $job -Force -EA SilentlyContinue
-        if ($ips.Count -gt 0) { break }
-      } catch {}
+  $bytes = New-Object byte[] 16
+  [Array]::Copy($hash, $bytes, 16)
+  $bytes[7] = [byte](($bytes[7] -band 0x0F) -bor 0x50)
+  $bytes[8] = [byte](($bytes[8] -band 0x3F) -bor 0x80)
+  return ([Guid]::new($bytes)).ToString('B')
+}
+
+function Test-DynamicFirewallSupport {
+  $required = @(
+    'Get-NetFirewallDynamicKeywordAddress',
+    'New-NetFirewallDynamicKeywordAddress',
+    'Remove-NetFirewallDynamicKeywordAddress',
+    'Get-NetFirewallApplicationFilter',
+    'Get-NetFirewallPortFilter',
+    'Get-NetFirewallProfile',
+    'Get-NetFirewallRule',
+    'Get-NetFirewallServiceFilter',
+    'New-NetFirewallRule',
+    'Remove-NetFirewallRule'
+  )
+  foreach ($commandName in $required) {
+    if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
+      return $false
     }
-    if (-not $ips -or $ips.Count -eq 0) {
-      Write-Output "DNS miss for firewall IPs (hosts block still active): $h"
+  }
+  return $true
+}
+
+function Get-AllDynamicKeywordObjects {
+  return @(
+    Get-NetFirewallDynamicKeywordAddress `
+      -All `
+      -PolicyStore ActiveStore `
+      -ErrorAction Stop
+  )
+}
+
+function ConvertTo-NormalizedGuidText {
+  param([AllowNull()][string]$Value)
+
+  if (-not $Value) {
+    return ''
+  }
+  return $Value.Trim().Trim('{', '}').ToLowerInvariant()
+}
+
+function Test-StringSetEqual {
+  param(
+    [string[]]$Left,
+    [string[]]$Right
+  )
+
+  $a = @($Left | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+  $b = @($Right | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+  if ($a.Count -ne $b.Count) {
+    return $false
+  }
+  for ($i = 0; $i -lt $a.Count; $i++) {
+    if ($a[$i] -cne $b[$i]) {
+      return $false
+    }
+  }
+  return $true
+}
+
+function Test-FirewallEnforcementStatus {
+  param([AllowNull()][string]$Status)
+
+  if (-not $Status) {
+    return $false
+  }
+  return (
+    $Status -match '(?i)\b(Full|Enforced)\b' -and
+    $Status -notmatch '(?i)(Disallowed|Disabled|Error|NoRemoteAddress|NoApplication|NotTarget|FirewallOff)'
+  )
+}
+
+function Get-FirewallState {
+  if (-not (Test-DynamicFirewallSupport)) {
+    return [pscustomobject]@{
+      Available = $false
+      Health = 'Unavailable'
+      KeywordCount = 0
+      MissingKeywords = @($script:BlockHosts)
+      InvalidKeywords = @()
+      RuleCount = 0
+      RuleValid = $false
+      FqdnRuleEnforcement = 'Unavailable'
+      MintServiceRuleCount = 0
+      MintServiceRuleValid = $false
+      MintServiceRuleEnforcement = 'Unavailable'
+      StagingRuleCount = 0
+      HydratedKeywordCount = 0
+      MintKeywordHydrated = $false
+      InfrastructureHealthy = $false
+      LegacyRuleCount = 0
+      Errors = @()
+    }
+  }
+
+  $errors = New-Object System.Collections.Generic.List[string]
+  $missing = New-Object System.Collections.Generic.List[string]
+  $invalid = New-Object System.Collections.Generic.List[string]
+  $keywordCount = 0
+  $hydratedKeywordCount = 0
+  $mintKeywordHydrated = $false
+  $allKeywordObjects = @()
+
+  try {
+    $allKeywordObjects = @(Get-AllDynamicKeywordObjects)
+  } catch {
+    [void]$errors.Add(('Keywords: {0}' -f $_.Exception.Message))
+  }
+
+  if ($errors.Count -eq 0) {
+    foreach ($hostName in $script:BlockHosts) {
+      $id = ConvertTo-NormalizedGuidText (Get-DynamicKeywordId $hostName)
+      $objects = @(
+        $allKeywordObjects |
+          Where-Object { (ConvertTo-NormalizedGuidText $_.Id) -eq $id }
+      )
+      if ($objects.Count -eq 0) {
+        [void]$missing.Add($hostName)
+        continue
+      }
+      $keywordCount += $objects.Count
+      if (
+        $objects.Count -ne 1 -or
+        $objects[0].Keyword -ine $hostName -or
+        -not [bool]$objects[0].AutoResolve
+      ) {
+        [void]$invalid.Add($hostName)
+      }
+      if (
+        $objects.Count -eq 1 -and
+        @($objects[0].Addresses | Where-Object { $_ }).Count -gt 0
+      ) {
+        $hydratedKeywordCount++
+        if ($hostName -ieq $script:MintHost) {
+          $mintKeywordHydrated = $true
+        }
+      }
+    }
+  }
+
+  $rules = @()
+  $mintServiceRules = @()
+  $stagingRules = @()
+  $legacyRules = @()
+  try {
+    $rules = @(
+      Get-NetFirewallRule `
+        -DisplayName $script:FirewallRuleDisplayName `
+        -PolicyStore ActiveStore `
+        -ErrorAction SilentlyContinue
+    )
+    $allManagedRules = @(
+      Get-NetFirewallRule `
+        -DisplayName ($script:RulePrefix + '*') `
+        -PolicyStore ActiveStore `
+        -ErrorAction SilentlyContinue
+    )
+    $mintServiceRules = @(
+      Get-NetFirewallRule `
+        -Name $script:MintServiceRuleName `
+        -PolicyStore ActiveStore `
+        -ErrorAction SilentlyContinue
+    )
+    $stagingRules = @(
+      Get-NetFirewallRule `
+        -Name $script:StagingMintServiceRuleName `
+        -PolicyStore ActiveStore `
+        -ErrorAction SilentlyContinue
+    )
+    $legacyRules = @(
+      $allManagedRules |
+        Where-Object {
+          $_.DisplayName -notin @(
+            $script:FirewallRuleDisplayName,
+            $script:MintServiceRuleDisplayName
+          )
+        }
+    )
+  } catch {
+    [void]$errors.Add(('Rules: {0}' -f $_.Exception.Message))
+  }
+
+  $ruleValid = $false
+  $fqdnRuleEnforcement = 'Absent'
+  if ($rules.Count -eq 1) {
+    $fqdnRuleEnforcement = [string]$rules[0].EnforcementStatus
+    $expectedIds = @(
+      $script:BlockHosts |
+        ForEach-Object { ConvertTo-NormalizedGuidText (Get-DynamicKeywordId $_) }
+    )
+    $actualIds = @(
+      $rules[0].RemoteDynamicKeywordAddresses |
+        ForEach-Object { ConvertTo-NormalizedGuidText $_ }
+    )
+    try {
+      $applicationFilters = @(
+        Get-NetFirewallApplicationFilter `
+          -AssociatedNetFirewallRule $rules[0] `
+          -ErrorAction Stop
+      )
+      $serviceFilters = @(
+        Get-NetFirewallServiceFilter `
+          -AssociatedNetFirewallRule $rules[0] `
+          -ErrorAction Stop
+      )
+      $portFilters = @(
+        Get-NetFirewallPortFilter `
+          -AssociatedNetFirewallRule $rules[0] `
+          -ErrorAction Stop
+      )
+      $ruleValid = (
+        $rules[0].Direction.ToString() -eq 'Outbound' -and
+        $rules[0].Action.ToString() -eq 'Block' -and
+        $rules[0].Enabled.ToString() -eq 'True' -and
+        $rules[0].Profile.ToString() -eq 'Any' -and
+        (Test-StringSetEqual -Left $actualIds -Right $expectedIds) -and
+        $applicationFilters.Count -eq 1 -and
+        $applicationFilters[0].Program -eq 'Any' -and
+        $serviceFilters.Count -eq 1 -and
+        $serviceFilters[0].Service -eq 'Any' -and
+        $portFilters.Count -eq 1 -and
+        $portFilters[0].Protocol.ToString() -eq 'Any'
+      )
+    } catch {
+      [void]$errors.Add(('FQDN rule filters: {0}' -f $_.Exception.Message))
+    }
+  }
+
+  $mintServiceRuleValid = $false
+  $mintServiceRuleEnforcement = 'Absent'
+  if ($mintServiceRules.Count -eq 1) {
+    $mintServiceRuleEnforcement = [string]$mintServiceRules[0].EnforcementStatus
+    try {
+      $serviceFilters = @(
+        Get-NetFirewallServiceFilter `
+          -AssociatedNetFirewallRule $mintServiceRules[0] `
+          -ErrorAction Stop
+      )
+      $applicationFilters = @(
+        Get-NetFirewallApplicationFilter `
+          -AssociatedNetFirewallRule $mintServiceRules[0] `
+          -ErrorAction Stop
+      )
+      $portFilters = @(
+        Get-NetFirewallPortFilter `
+          -AssociatedNetFirewallRule $mintServiceRules[0] `
+          -ErrorAction Stop
+      )
+      $expectedProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
+      $mintServiceRuleValid = (
+        $mintServiceRules[0].Direction.ToString() -eq 'Outbound' -and
+        $mintServiceRules[0].Action.ToString() -eq 'Block' -and
+        $mintServiceRules[0].Enabled.ToString() -eq 'True' -and
+        (Test-FirewallEnforcementStatus $mintServiceRuleEnforcement) -and
+        $mintServiceRules[0].Profile.ToString() -eq 'Any' -and
+        $serviceFilters.Count -eq 1 -and
+        $serviceFilters[0].Service -ieq 'wlidsvc' -and
+        $applicationFilters.Count -eq 1 -and
+        $applicationFilters[0].Program -ieq $expectedProgram -and
+        $portFilters.Count -eq 1 -and
+        $portFilters[0].Protocol.ToString() -eq 'Any'
+      )
+    } catch {
+      [void]$errors.Add(('Mint service rule: {0}' -f $_.Exception.Message))
+    }
+  }
+
+  $infrastructureHealthy = $false
+  try {
+    $firewallService = Get-Service -Name MpsSvc -ErrorAction Stop
+    $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)
+    $infrastructureHealthy = (
+      $firewallService.Status -eq 'Running' -and
+      $profiles.Count -gt 0 -and
+      @(
+        $profiles |
+          Where-Object {
+            $_.Enabled.ToString() -ne 'True' -or
+            ([string]$_.AllowLocalFirewallRules) -eq 'False'
+          }
+      ).Count -eq 0
+    )
+  } catch {
+    [void]$errors.Add(('Firewall infrastructure: {0}' -f $_.Exception.Message))
+  }
+
+  $health = 'Malformed'
+  if ($errors.Count -gt 0) {
+    $health = 'Error'
+  } elseif (
+    $keywordCount -eq 0 -and
+    $rules.Count -eq 0 -and
+    $mintServiceRules.Count -eq 0 -and
+    $stagingRules.Count -eq 0 -and
+    $legacyRules.Count -eq 0
+  ) {
+    $health = 'Absent'
+  } elseif (
+    $missing.Count -eq 0 -and
+    $invalid.Count -eq 0 -and
+    $ruleValid -and
+    $mintServiceRuleValid -and
+    $infrastructureHealthy -and
+    $stagingRules.Count -eq 0 -and
+    $legacyRules.Count -eq 0
+  ) {
+    $health = 'Valid'
+  }
+
+  return [pscustomobject]@{
+    Available = $true
+    Health = $health
+    KeywordCount = $keywordCount
+    MissingKeywords = $missing.ToArray()
+    InvalidKeywords = $invalid.ToArray()
+    RuleCount = $rules.Count + $mintServiceRules.Count
+    RuleValid = $ruleValid
+    FqdnRuleEnforcement = $fqdnRuleEnforcement
+    MintServiceRuleCount = $mintServiceRules.Count
+    MintServiceRuleValid = $mintServiceRuleValid
+    MintServiceRuleEnforcement = $mintServiceRuleEnforcement
+    StagingRuleCount = $stagingRules.Count
+    HydratedKeywordCount = $hydratedKeywordCount
+    MintKeywordHydrated = $mintKeywordHydrated
+    InfrastructureHealthy = $infrastructureHealthy
+    LegacyRuleCount = $legacyRules.Count
+    Errors = $errors.ToArray()
+  }
+}
+
+function Remove-ManagedFirewallRules {
+  $rules = @(
+    Get-NetFirewallRule `
+      -DisplayName ($script:RulePrefix + '*') `
+      -ErrorAction SilentlyContinue
+  )
+  $namedRule = @(
+    Get-NetFirewallRule `
+      -Name $script:FirewallRuleName `
+      -ErrorAction SilentlyContinue
+  )
+  $mintNamedRule = @(
+    Get-NetFirewallRule `
+      -Name $script:MintServiceRuleName `
+      -ErrorAction SilentlyContinue
+  )
+  $allRules = @(
+    $rules + $namedRule + $mintNamedRule |
+      Sort-Object Name -Unique
+  )
+  foreach ($rule in $allRules) {
+    Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop
+  }
+}
+
+function Remove-StagingMintServiceRule {
+  $rules = @(
+    Get-NetFirewallRule `
+      -Name $script:StagingMintServiceRuleName `
+      -ErrorAction SilentlyContinue
+  )
+  foreach ($rule in $rules) {
+    Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop
+  }
+}
+
+function New-StagingMintServiceRule {
+  Remove-StagingMintServiceRule
+  New-NetFirewallRule `
+    -Name $script:StagingMintServiceRuleName `
+    -DisplayName $script:StagingMintServiceRuleDisplayName `
+    -Group $script:FirewallGroup `
+    -Description 'degdid temporary fail-closed wlidsvc deny during refresh' `
+    -Direction Outbound `
+    -Action Block `
+    -Enabled True `
+    -Profile Any `
+    -Protocol Any `
+    -Program (Join-Path $env:SystemRoot 'System32\svchost.exe') `
+    -Service 'wlidsvc' `
+    -ErrorAction Stop | Out-Null
+}
+
+function Test-StagingMintServiceRuleEnforced {
+  try {
+    $rules = @(
+      Get-NetFirewallRule `
+        -Name $script:StagingMintServiceRuleName `
+        -PolicyStore ActiveStore `
+        -ErrorAction Stop
+    )
+    if (
+      $rules.Count -ne 1 -or
+      -not (Test-FirewallEnforcementStatus ([string]$rules[0].EnforcementStatus))
+    ) {
+      return $false
+    }
+    $serviceFilters = @(
+      Get-NetFirewallServiceFilter `
+        -AssociatedNetFirewallRule $rules[0] `
+        -ErrorAction Stop
+    )
+    return (
+      $serviceFilters.Count -eq 1 -and
+      $serviceFilters[0].Service -ieq 'wlidsvc'
+    )
+  } catch {
+    return $false
+  }
+}
+
+function Remove-DegdidDynamicKeyword {
+  param([string]$HostName)
+
+  $id = Get-DynamicKeywordId $HostName
+  $existing = @(
+    Get-NetFirewallDynamicKeywordAddress `
+      -Id $id `
+      -ErrorAction SilentlyContinue
+  )
+  if ($existing.Count -gt 0) {
+    Remove-NetFirewallDynamicKeywordAddress `
+      -Id $id `
+      -Confirm:$false `
+      -ErrorAction Stop
+  }
+}
+
+function Set-FirewallBlock {
+  param(
+    [switch]$DryRun,
+    [switch]$UseExistingStaging
+  )
+
+  if (-not (Test-DynamicFirewallSupport)) {
+    return [pscustomobject]@{
+      Success = $false
+      DryRun = [bool]$DryRun
+      Message = 'Dynamic-keyword firewall cmdlets are unavailable.'
+      State = Get-FirewallState
+    }
+  }
+
+  if ($DryRun) {
+    return [pscustomobject]@{
+      Success = $true
+      DryRun = $true
+      Message = 'Would replace managed keywords and the outbound FQDN rule.'
+      State = Get-FirewallState
+    }
+  }
+
+  try {
+    if (-not $UseExistingStaging) {
+      New-StagingMintServiceRule
+      if (-not (Test-StagingMintServiceRuleEnforced)) {
+        throw 'Staging wlidsvc rule is not fully enforced in ActiveStore.'
+      }
+    }
+    Remove-ManagedFirewallRules
+    foreach ($hostName in $script:BlockHosts) {
+      Remove-DegdidDynamicKeyword -HostName $hostName
+    }
+
+    $ids = New-Object System.Collections.Generic.List[string]
+    foreach ($hostName in $script:BlockHosts) {
+      $id = Get-DynamicKeywordId $hostName
+      New-NetFirewallDynamicKeywordAddress `
+        -Id $id `
+        -Keyword $hostName `
+        -AutoResolve $true `
+        -ErrorAction Stop | Out-Null
+      [void]$ids.Add($id)
+    }
+
+    New-NetFirewallRule `
+      -Name $script:FirewallRuleName `
+      -DisplayName $script:FirewallRuleDisplayName `
+      -Group $script:FirewallGroup `
+      -Description 'degdid managed FQDN registration block' `
+      -Direction Outbound `
+      -Action Block `
+      -Enabled True `
+      -Profile Any `
+      -Protocol Any `
+      -RemoteDynamicKeywordAddresses $ids.ToArray() `
+      -ErrorAction Stop | Out-Null
+
+    New-NetFirewallRule `
+      -Name $script:MintServiceRuleName `
+      -DisplayName $script:MintServiceRuleDisplayName `
+      -Group $script:FirewallGroup `
+      -Description 'degdid blocks all wlidsvc outbound DeviceAdd traffic' `
+      -Direction Outbound `
+      -Action Block `
+      -Enabled True `
+      -Profile Any `
+      -Protocol Any `
+      -Program (Join-Path $env:SystemRoot 'System32\svchost.exe') `
+      -Service 'wlidsvc' `
+      -ErrorAction Stop | Out-Null
+
+    # Hosts entries intentionally suppress normal DNS. Generate explicit
+    # no-hosts DNS traffic so the FQDN callout can hydrate the mint keyword
+    # when a resolver is reachable. The service rule remains the independent
+    # fail-closed mint control when offline or unhydrated.
+    foreach ($recordType in @('A', 'AAAA')) {
+      Resolve-DnsName `
+        -Name $script:MintHost `
+        -Type $recordType `
+        -DnsOnly `
+        -NoHostsFile `
+        -QuickTimeout `
+        -ErrorAction SilentlyContinue | Out-Null
+    }
+    Remove-StagingMintServiceRule
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      DryRun = $false
+      Message = $_.Exception.Message
+      State = Get-FirewallState
+    }
+  }
+
+  $state = Get-FirewallState
+  return [pscustomobject]@{
+    Success = $state.Health -eq 'Valid'
+    DryRun = $false
+    Message = 'Dynamic-keyword objects and outbound rule applied.'
+    State = $state
+  }
+}
+
+function Remove-FirewallBlock {
+  param([switch]$DryRun)
+
+  if ($DryRun) {
+    return [pscustomobject]@{
+      Success = Test-DynamicFirewallSupport
+      DryRun = $true
+      Message = 'Would remove current and legacy managed firewall rules and keywords.'
+      State = Get-FirewallState
+    }
+  }
+
+  try {
+    if (
+      -not (Get-Command Get-NetFirewallRule -ErrorAction SilentlyContinue) -or
+      -not (Get-Command Remove-NetFirewallRule -ErrorAction SilentlyContinue)
+    ) {
+      throw 'Firewall rule cmdlets are unavailable.'
+    }
+    Remove-ManagedFirewallRules
+    Remove-StagingMintServiceRule
+
+    if (-not (Test-DynamicFirewallSupport)) {
+      throw 'Dynamic-keyword cmdlets are unavailable; keyword cleanup cannot verify.'
+    }
+    foreach ($hostName in $script:BlockHosts) {
+      Remove-DegdidDynamicKeyword -HostName $hostName
+    }
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      DryRun = $false
+      Message = $_.Exception.Message
+      State = Get-FirewallState
+    }
+  }
+
+  $state = Get-FirewallState
+  return [pscustomobject]@{
+    Success = $state.Health -eq 'Absent'
+    DryRun = $false
+    Message = 'Managed firewall rules and keywords removed.'
+    State = $state
+  }
+}
+
+function Test-LooksOnline {
+  try {
+    $upAdapters = @(
+      Get-NetAdapter -ErrorAction Stop |
+        Where-Object { $_.Status -eq 'Up' }
+    )
+    if ($upAdapters.Count -eq 0) {
+      return $false
+    }
+
+    $routes = @(
+      Get-NetRoute -ErrorAction Stop |
+        Where-Object {
+          ($_.DestinationPrefix -eq '0.0.0.0/0' -and $_.NextHop -ne '0.0.0.0') -or
+          ($_.DestinationPrefix -eq '::/0' -and $_.NextHop -ne '::')
+        }
+    )
+    return $routes.Count -gt 0
+  } catch {
+    return $false
+  }
+}
+
+function Test-TcpConnect {
+  param(
+    [string]$HostName,
+    [int]$Port = 443,
+    [int]$TimeoutMilliseconds = 3000
+  )
+
+  $client = [System.Net.Sockets.TcpClient]::new()
+  $waitHandle = $null
+  try {
+    $async = $client.BeginConnect($HostName, $Port, $null, $null)
+    $waitHandle = $async.AsyncWaitHandle
+    if (-not $waitHandle.WaitOne($TimeoutMilliseconds, $false)) {
+      return $false
+    }
+    $client.EndConnect($async)
+    return $client.Connected
+  } catch {
+    return $false
+  } finally {
+    if ($null -ne $waitHandle) {
+      $waitHandle.Close()
+    }
+    $client.Close()
+  }
+}
+
+function Get-MintPathState {
+  param(
+    [object]$HostsState,
+    [object]$FirewallState
+  )
+
+  $online = Test-LooksOnline
+  $ipv4 = @()
+  $ipv6 = @()
+  $resolutionErrors = New-Object System.Collections.Generic.List[string]
+
+  try {
+    $ipv4 = @(
+      Resolve-DnsName `
+        -Name $script:MintHost `
+        -Type A `
+        -ErrorAction Stop |
+        Where-Object { $_.IPAddress } |
+        ForEach-Object { $_.IPAddress }
+    )
+  } catch {
+    [void]$resolutionErrors.Add(('IPv4: {0}' -f $_.Exception.Message))
+  }
+
+  try {
+    $ipv6 = @(
+      Resolve-DnsName `
+        -Name $script:MintHost `
+        -Type AAAA `
+        -ErrorAction Stop |
+        Where-Object { $_.IPAddress } |
+        ForEach-Object { $_.IPAddress }
+    )
+  } catch {
+    [void]$resolutionErrors.Add(('IPv6: {0}' -f $_.Exception.Message))
+  }
+
+  $ipv4Blocked = (
+    $ipv4.Count -gt 0 -and
+    @($ipv4 | Where-Object { $_ -ne '0.0.0.0' }).Count -eq 0
+  )
+  $ipv6Blocked = (
+    $ipv6.Count -gt 0 -and
+    @($ipv6 | Where-Object { $_ -notin @('::', '0:0:0:0:0:0:0:0') }).Count -eq 0
+  )
+
+  $configurationValid = (
+    $HostsState.State -eq 'Valid' -and
+    $HostsState.Canonical -and
+    $FirewallState.Health -eq 'Valid'
+  )
+  $tcpProbe = 'SkippedConfigurationDegraded'
+  $tcpBlocked = $false
+
+  if ($configurationValid -and $ipv4Blocked -and $ipv6Blocked) {
+    if ($online) {
+      $tcpBlocked = -not (Test-TcpConnect -HostName $script:MintHost)
+      if ($tcpBlocked) {
+        $tcpProbe = 'Blocked'
+      } else {
+        $tcpProbe = 'Connected'
+      }
+    } else {
+      $tcpBlocked = $true
+      $tcpProbe = 'OfflineAccepted'
+    }
+  }
+
+  $health = 'Degraded'
+  if (
+    $configurationValid -and
+    $ipv4Blocked -and
+    $ipv6Blocked -and
+    $tcpBlocked
+  ) {
+    $health = 'Valid'
+  } elseif ($resolutionErrors.Count -gt 0 -and $configurationValid) {
+    $health = 'Error'
+  }
+
+  return [pscustomobject]@{
+    Health = $health
+    Online = $online
+    IPv4Blocked = $ipv4Blocked
+    IPv6Blocked = $ipv6Blocked
+    IPv4AnswerCount = $ipv4.Count
+    IPv6AnswerCount = $ipv6.Count
+    UnexpectedAddressCount = @(
+      $ipv4 | Where-Object { $_ -ne '0.0.0.0' }
+    ).Count + @(
+      $ipv6 | Where-Object { $_ -notin @('::', '0:0:0:0:0:0:0:0') }
+    ).Count
+    TcpProbe = $tcpProbe
+    TcpBlocked = $tcpBlocked
+    OfflineAccepted = $tcpProbe -eq 'OfflineAccepted'
+    Errors = $resolutionErrors.ToArray()
+  }
+}
+
+function Get-ProtectionGate {
+  try {
+    $document = Read-HostsDocument
+    $hostsState = $document.State
+  } catch {
+    $hostsState = [pscustomobject]@{
+      State = 'Error'
+      Canonical = $false
+      IPv4Count = 0
+      IPv6Count = 0
+      MissingIPv4 = @($script:BlockHosts)
+      MissingIPv6 = @($script:BlockHosts)
+      Error = $_.Exception.Message
+    }
+  }
+  $firewallState = Get-FirewallState
+  $mintPath = Get-MintPathState -HostsState $hostsState -FirewallState $firewallState
+
+  return [pscustomobject]@{
+    Healthy = (
+      $hostsState.State -eq 'Valid' -and
+      $hostsState.Canonical -and
+      $firewallState.Health -eq 'Valid' -and
+      $mintPath.Health -eq 'Valid'
+    )
+    Hosts = $hostsState
+    Firewall = $firewallState
+    MintPath = $mintPath
+  }
+}
+
+function Test-IsAdministrator {
+  try {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole(
+      [System.Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+  } catch {
+    return $false
+  }
+}
+
+function Get-DsregJoinState {
+  $exe = Join-Path $env:SystemRoot 'System32\dsregcmd.exe'
+  if (-not [System.IO.File]::Exists($exe)) {
+    return [pscustomobject]@{
+      Known = $false
+      EntraJoined = $false
+      Error = 'dsregcmd.exe is unavailable.'
+    }
+  }
+
+  try {
+    $output = @(& $exe /status 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      throw 'dsregcmd exited with code {0}.' -f $exitCode
+    }
+    $text = $output -join "`n"
+    $azure = [regex]::Match(
+      $text,
+      '(?im)^\s*AzureAdJoined\s*:\s*(YES|NO)\s*$'
+    )
+    $enterprise = [regex]::Match(
+      $text,
+      '(?im)^\s*EnterpriseJoined\s*:\s*(YES|NO)\s*$'
+    )
+    if (-not $azure.Success -or -not $enterprise.Success) {
+      throw 'dsregcmd output did not contain explicit machine join fields.'
+    }
+    $joined = (
+      $azure.Groups[1].Value -eq 'YES' -or
+      $enterprise.Groups[1].Value -eq 'YES'
+    )
+    return [pscustomobject]@{
+      Known = $true
+      EntraJoined = [bool]$joined
+      Error = $null
+    }
+  } catch {
+    return [pscustomobject]@{
+      Known = $false
+      EntraJoined = $false
+      Error = $_.Exception.Message
+    }
+  }
+}
+
+function Get-MdmEnrollmentState {
+  $evidence = 0
+  try {
+    $enrollmentsPath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments'
+    if (Test-Path -LiteralPath $enrollmentsPath -ErrorAction Stop) {
+      foreach (
+        $key in @(
+          Get-ChildItem -LiteralPath $enrollmentsPath -ErrorAction Stop |
+            Where-Object {
+              $_.PSChildName -match '^\{?[0-9A-Fa-f-]{36}\}?$'
+            }
+        )
+      ) {
+        $item = Get-Item -LiteralPath $key.PSPath -ErrorAction Stop
+        $names = @($item.GetValueNames())
+        $upn = $item.GetValue('UPN', $null)
+        $discovery = $item.GetValue('DiscoveryServiceFullURL', $null)
+        $state = $item.GetValue('EnrollmentState', $null)
+        if (
+          $names -contains 'EnrollmentState' -and
+          [int]$state -eq 1 -and
+          ($upn -or $discovery)
+        ) {
+          $evidence++
+        }
+      }
+    }
+
+    $omadmPath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Provisioning\OMADM\Accounts'
+    if (Test-Path -LiteralPath $omadmPath -ErrorAction Stop) {
+      $evidence += @(
+        Get-ChildItem -LiteralPath $omadmPath -ErrorAction Stop
+      ).Count
+    }
+
+    return [pscustomobject]@{
+      Known = $true
+      Enrolled = $evidence -gt 0
+      EvidenceCount = $evidence
+      Error = $null
+    }
+  } catch {
+    return [pscustomobject]@{
+      Known = $false
+      Enrolled = $false
+      EvidenceCount = $evidence
+      Error = $_.Exception.Message
+    }
+  }
+}
+
+function Get-ProfileTopology {
+  param([object[]]$Profiles)
+
+  $all = @($Profiles)
+  $loaded = @($all | Where-Object { [bool]$_.Loaded })
+  return [pscustomobject]@{
+    Artifacts = $all
+    Loaded = $loaded
+    ArtifactCount = $all.Count
+    LoadedCount = $loaded.Count
+    DormantCount = $all.Count - $loaded.Count
+  }
+}
+
+function Get-EnvironmentState {
+  $unsupported = New-Object System.Collections.Generic.List[string]
+  $warnings = New-Object System.Collections.Generic.List[string]
+  $targetFailures = New-Object System.Collections.Generic.List[string]
+  $inspectionErrors = New-Object System.Collections.Generic.List[string]
+  $target = $null
+  $build = 0
+  $displayVersion = $null
+  $productName = $null
+  $domainJoined = $false
+  $humanProfiles = @()
+  $loadedHumanProfiles = @()
+  $workstation = $false
+
+  if (
+    [Environment]::Is64BitOperatingSystem -and
+    -not [Environment]::Is64BitProcess
+  ) {
+    [void]$unsupported.Add(
+      'Mutation requires 64-bit PowerShell so the native HKLM identity stores are visible.'
+    )
+  }
+
+  try {
+    $currentVersion = Get-ItemProperty `
+      -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' `
+      -ErrorAction Stop
+    $build = [int]$currentVersion.CurrentBuildNumber
+    $displayVersion = [string]$currentVersion.DisplayVersion
+    $productName = [string]$currentVersion.ProductName
+    if (
+      $build -ne $script:SupportedBuild -or
+      $displayVersion -ne $script:SupportedDisplayVersion
+    ) {
+      [void]$unsupported.Add(
+        'Validated mutation scope is Windows 11 25H2 build 26200; found {0} build {1}.' -f
+        $displayVersion,
+        $build
+      )
+    }
+  } catch {
+    [void]$inspectionErrors.Add(('Windows version: {0}' -f $_.Exception.Message))
+    [void]$unsupported.Add('Windows version could not be established.')
+  }
+
+  try {
+    $operatingSystem = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $workstation = [int]$operatingSystem.ProductType -eq 1
+    if (-not $workstation) {
+      [void]$unsupported.Add('Windows client/workstation edition is required.')
+    }
+  } catch {
+    [void]$inspectionErrors.Add(('Operating system role: {0}' -f $_.Exception.Message))
+    [void]$unsupported.Add('Windows workstation role could not be established.')
+  }
+
+  $computer = $null
+  try {
+    $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    $domainJoined = [bool]$computer.PartOfDomain
+    if ($domainJoined) {
+      [void]$unsupported.Add('Domain-joined systems are outside the mutation contract.')
+    }
+  } catch {
+    [void]$inspectionErrors.Add(('Computer state: {0}' -f $_.Exception.Message))
+    [void]$unsupported.Add('Domain-join state could not be established.')
+  }
+
+  $dsreg = Get-DsregJoinState
+  if (-not $dsreg.Known) {
+    [void]$inspectionErrors.Add(('Entra state: {0}' -f $dsreg.Error))
+    [void]$unsupported.Add('Entra-join state could not be established.')
+  } elseif ($dsreg.EntraJoined) {
+    [void]$unsupported.Add('Entra-joined or Entra-registered systems are unsupported.')
+  }
+
+  $mdm = Get-MdmEnrollmentState
+  if (-not $mdm.Known) {
+    [void]$inspectionErrors.Add(('MDM state: {0}' -f $mdm.Error))
+    [void]$unsupported.Add('MDM enrollment state could not be established.')
+  } elseif ($mdm.Enrolled) {
+    [void]$unsupported.Add('MDM-enrolled systems are unsupported.')
+  }
+
+  try {
+    $humanProfiles = @(
+      Get-CimInstance Win32_UserProfile -ErrorAction Stop |
+        Where-Object {
+          -not $_.Special -and
+          $_.LocalPath -and
+          $_.SID -match '^S-1-5-21-\d+-\d+-\d+-\d+$'
+        }
+    )
+    $profileTopology = Get-ProfileTopology -Profiles $humanProfiles
+    $loadedHumanProfiles = @($profileTopology.Loaded)
+    if ($loadedHumanProfiles.Count -gt 1) {
+      [void]$unsupported.Add(
+        'Only one loaded human-profile hive is supported; found {0}.' -f
+        $loadedHumanProfiles.Count
+      )
+    }
+    $dormantCount = $profileTopology.DormantCount
+    if ($dormantCount -gt 0) {
+      [void]$warnings.Add(
+        '{0} dormant non-special profile artifact(s) will not be mutated.' -f
+        $dormantCount
+      )
+    }
+  } catch {
+    [void]$inspectionErrors.Add(('Profiles: {0}' -f $_.Exception.Message))
+    [void]$targetFailures.Add('Human profiles could not be enumerated.')
+  }
+
+  $accountName = $null
+  $targetResolution = 'InteractiveConsole'
+  if ($null -ne $computer) {
+    $accountName = [string]$computer.UserName
+  }
+  if (-not $accountName -and $loadedHumanProfiles.Count -eq 1) {
+    try {
+      $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+      if (
+        $currentIdentity.User.Value -eq $loadedHumanProfiles[0].SID
+      ) {
+        $accountName = $currentIdentity.Name
+        $targetResolution = 'AuthenticatedSoleProfile'
+      }
+    } catch {
+      [void]$inspectionErrors.Add(
+        ('Authenticated-profile fallback: {0}' -f $_.Exception.Message)
+      )
+    }
+  }
+  if (-not $accountName) {
+    [void]$targetFailures.Add(
+      'No active interactive user or authenticated sole-profile session was available.'
+    )
+  } else {
+    try {
+      $account = [System.Security.Principal.NTAccount]::new($accountName)
+      $sid = $account.Translate(
+        [System.Security.Principal.SecurityIdentifier]
+      ).Value
+      $profile = @($humanProfiles | Where-Object { $_.SID -eq $sid })
+      if ($profile.Count -ne 1) {
+        [void]$targetFailures.Add(
+          'The active/authenticated target does not map to one profile artifact.'
+        )
+      } else {
+        $hivePath = 'Registry::HKEY_USERS\{0}' -f $sid
+        $hiveLoaded = (
+          [bool]$profile[0].Loaded -and
+          (Test-Path -LiteralPath $hivePath -ErrorAction Stop)
+        )
+        if (-not $hiveLoaded) {
+          [void]$targetFailures.Add('The active target user hive is not loaded.')
+        }
+        $target = [pscustomobject]@{
+          AccountName = $accountName
+          Sid = $sid
+          ProfilePath = [string]$profile[0].LocalPath
+          HivePath = $hivePath
+          HiveLoaded = $hiveLoaded
+          Resolution = $targetResolution
+        }
+        if ($hiveLoaded) {
+          $workplacePath = (
+            '{0}\Software\Microsoft\Windows NT\CurrentVersion\WorkplaceJoin\JoinInfo' -f
+            $hivePath
+          )
+          if (
+            (Test-Path -LiteralPath $workplacePath -ErrorAction Stop) -and
+            @(Get-ChildItem -LiteralPath $workplacePath -ErrorAction Stop).Count -gt 0
+          ) {
+            [void]$unsupported.Add(
+              'The target user has a Workplace/Entra registration and is unsupported.'
+            )
+          }
+        }
+      }
+    } catch {
+      [void]$inspectionErrors.Add(('Target user: {0}' -f $_.Exception.Message))
+      [void]$targetFailures.Add('The active interactive user SID could not be resolved.')
+    }
+  }
+
+  return [pscustomobject]@{
+    Supported = ($unsupported.Count -eq 0 -and $targetFailures.Count -eq 0)
+    IsAdministrator = Test-IsAdministrator
+    IsWindows11 = ($build -ge 22000 -and $workstation)
+    IsSupportedBuild = (
+      $build -eq $script:SupportedBuild -and
+      $displayVersion -eq $script:SupportedDisplayVersion -and
+      $workstation
+    )
+    Is64BitProcess = [Environment]::Is64BitProcess
+    Unmanaged = (
+      $dsreg.Known -and
+      $mdm.Known -and
+      -not $domainJoined -and
+      -not $dsreg.EntraJoined -and
+      -not $mdm.Enrolled
+    )
+    Build = $build
+    DisplayVersion = $displayVersion
+    ProductName = $productName
+    DomainJoined = $domainJoined
+    EntraJoined = [bool]$dsreg.EntraJoined
+    MdmEnrolled = [bool]$mdm.Enrolled
+    HumanProfileCount = $loadedHumanProfiles.Count
+    DormantProfileCount = $humanProfiles.Count - $loadedHumanProfiles.Count
+    ProfileArtifactCount = $humanProfiles.Count
+    Target = $target
+    Warnings = $warnings.ToArray()
+    UnsupportedReasons = $unsupported.ToArray()
+    TargetFailureReasons = $targetFailures.ToArray()
+    InspectionErrors = $inspectionErrors.ToArray()
+  }
+}
+
+function Get-MutationPreflight {
+  param([object]$Environment)
+
+  if ($Environment.TargetFailureReasons.Count -gt 0 -or $null -eq $Environment.Target) {
+    return [pscustomobject]@{
+      Allowed = $false
+      ExitCode = 6
+      Message = ($Environment.TargetFailureReasons -join ' ')
+    }
+  }
+  if ($Environment.UnsupportedReasons.Count -gt 0) {
+    return [pscustomobject]@{
+      Allowed = $false
+      ExitCode = 2
+      Message = ($Environment.UnsupportedReasons -join ' ')
+    }
+  }
+  if (-not $Environment.IsAdministrator) {
+    return [pscustomobject]@{
+      Allowed = $false
+      ExitCode = 1
+      Message = 'Mutating actions require an elevated administrator PowerShell.'
+    }
+  }
+  return [pscustomobject]@{
+    Allowed = $true
+    ExitCode = 0
+    Message = 'Mutation environment accepted.'
+  }
+}
+
+function Get-TargetLocalAppData {
+  param([object]$Target)
+
+  $fallback = Join-Path $Target.ProfilePath 'AppData\Local'
+  $shellFoldersPath = (
+    '{0}\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -f
+    $Target.HivePath
+  )
+
+  try {
+    if (-not (Test-Path -LiteralPath $shellFoldersPath -ErrorAction Stop)) {
+      return [pscustomobject]@{
+        Path = $fallback
+        Error = $null
+      }
+    }
+
+    $key = Get-Item -LiteralPath $shellFoldersPath -ErrorAction Stop
+    $raw = [string]$key.GetValue(
+      'Local AppData',
+      $null,
+      [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    )
+    if (-not $raw) {
+      return [pscustomobject]@{
+        Path = $fallback
+        Error = $null
+      }
+    }
+
+    $expanded = [regex]::Replace(
+      $raw,
+      '(?i)%USERPROFILE%',
+      [System.Text.RegularExpressions.MatchEvaluator]{
+        param($match)
+        return $Target.ProfilePath
+      }
+    )
+    $expanded = [regex]::Replace(
+      $expanded,
+      '(?i)%HOMEDRIVE%%HOMEPATH%',
+      [System.Text.RegularExpressions.MatchEvaluator]{
+        param($match)
+        return $Target.ProfilePath
+      }
+    )
+    $systemDrive = [System.IO.Path]::GetPathRoot(
+      $Target.ProfilePath
+    ).TrimEnd('\')
+    $expanded = [regex]::Replace(
+      $expanded,
+      '(?i)%SystemDrive%',
+      [System.Text.RegularExpressions.MatchEvaluator]{
+        param($match)
+        return $systemDrive
+      }
+    )
+    if ($expanded -match '%[^%]+%') {
+      throw 'Local AppData contains an unsupported environment variable.'
+    }
+
+    return [pscustomobject]@{
+      Path = $expanded
+      Error = $null
+    }
+  } catch {
+    return [pscustomobject]@{
+      Path = $fallback
+      Error = 'Target Local AppData: {0}' -f $_.Exception.Message
+    }
+  }
+}
+
+function Get-GdidSourceModel {
+  param([object]$Target)
+
+  $identityRoot = '{0}\SOFTWARE\Microsoft\IdentityCRL' -f $Target.HivePath
+  $localAppDataResult = Get-TargetLocalAppData -Target $Target
+  $localAppData = $localAppDataResult.Path
+
+  return [pscustomobject]@{
+    ProfilePath = $Target.ProfilePath
+    Errors = @($localAppDataResult.Error | Where-Object { $_ })
+    Lids = @(
+      [pscustomobject]@{
+        Name = 'TargetUserLid'
+        Path = $identityRoot + '\ExtendedProperties'
+      },
+      [pscustomobject]@{
+        Name = 'DefaultLid'
+        Path = 'Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties'
+      },
+      [pscustomobject]@{
+        Name = 'SystemLid'
+        Path = 'Registry::HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL\ExtendedProperties'
+      }
+    )
+    PropertyPath = $identityRoot + '\Immersive\production\Property'
+    PropertyNativePath = (
+      '{0}\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property' -f
+      $Target.Sid
+    )
+    TokenPath = $identityRoot + '\Immersive\production\Token'
+    NegativeCachePath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
+    CachePaths = @(
+      [pscustomobject]@{
+        Name = 'TokenBroker'
+        Path = Join-Path $localAppData 'Microsoft\TokenBroker\Cache'
+      },
+      [pscustomobject]@{
+        Name = 'ConnectedDevicesPlatform'
+        Path = Join-Path $localAppData 'ConnectedDevicesPlatform'
+      }
+    )
+  }
+}
+
+function Test-GdidSourceModelSafety {
+  param([object]$Model)
+
+  $errors = New-Object System.Collections.Generic.List[string]
+  try {
+    $profileRoot = [System.IO.Path]::GetFullPath($Model.ProfilePath).TrimEnd('\')
+    $profilePrefix = $profileRoot + '\'
+    if (-not [System.IO.Directory]::Exists($profileRoot)) {
+      [void]$errors.Add('Target profile root does not exist.')
+    } else {
+      $profileItem = [System.IO.DirectoryInfo]::new($profileRoot)
+      if (
+        ($profileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+      ) {
+        [void]$errors.Add('Target profile root is a reparse point.')
+      }
+    }
+
+    foreach ($cachePath in $Model.CachePaths) {
+      $fullPath = [System.IO.Path]::GetFullPath($cachePath.Path)
+      if (
+        -not $fullPath.StartsWith(
+          $profilePrefix,
+          [System.StringComparison]::OrdinalIgnoreCase
+        )
+      ) {
+        [void]$errors.Add(
+          '{0} cache is outside the target profile.' -f $cachePath.Name
+        )
+        continue
+      }
+
+      # Reject a junction/symlink in any existing component between the
+      # target profile and the cache root, not merely at the final directory.
+      $errorCountBeforePath = $errors.Count
+      $cursor = $fullPath.TrimEnd('\')
+      while (
+        $cursor.Length -ge $profileRoot.Length -and
+        $cursor.StartsWith(
+          $profileRoot,
+          [System.StringComparison]::OrdinalIgnoreCase
+        )
+      ) {
+        if ([System.IO.Directory]::Exists($cursor)) {
+          $cursorItem = [System.IO.DirectoryInfo]::new($cursor)
+          if (
+            ($cursorItem.Attributes -band
+              [System.IO.FileAttributes]::ReparsePoint) -ne 0
+          ) {
+            [void]$errors.Add(
+              '{0} cache path contains reparse component {1}.' -f
+              $cachePath.Name,
+              $cursorItem.Name
+            )
+            break
+          }
+        }
+        if ($cursor -ieq $profileRoot) {
+          break
+        }
+        $parent = [System.IO.Path]::GetDirectoryName($cursor)
+        if (-not $parent -or $parent -eq $cursor) {
+          break
+        }
+        $cursor = $parent.TrimEnd('\')
+      }
+      if ($errors.Count -gt $errorCountBeforePath) {
+        continue
+      }
+
+      if (-not (Test-Path -LiteralPath $fullPath -ErrorAction Stop)) {
+        continue
+      }
+
+      $root = Get-Item -LiteralPath $fullPath -Force -ErrorAction Stop
+      if (
+        ([System.IO.FileAttributes]$root.Attributes -band
+          [System.IO.FileAttributes]::ReparsePoint) -ne 0
+      ) {
+        [void]$errors.Add(
+          '{0} cache root is a reparse point.' -f $cachePath.Name
+        )
+        continue
+      }
+
+      $pending = [System.Collections.Stack]::new()
+      $pending.Push([System.IO.DirectoryInfo]$root)
+      while ($pending.Count -gt 0) {
+        $directory = [System.IO.DirectoryInfo]$pending.Pop()
+        foreach ($child in $directory.GetFileSystemInfos()) {
+          if (
+            ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+          ) {
+            [void]$errors.Add(
+              '{0} cache contains a reparse point.' -f $cachePath.Name
+            )
+            continue
+          }
+          if ($child -is [System.IO.DirectoryInfo]) {
+            $pending.Push($child)
+          }
+        }
+      }
+    }
+  } catch {
+    [void]$errors.Add(('Cache path safety: {0}' -f $_.Exception.Message))
+  }
+
+  return [pscustomobject]@{
+    Success = $errors.Count -eq 0
+    Errors = $errors.ToArray()
+  }
+}
+
+function Add-InventoryEntry {
+  param(
+    [System.Collections.Generic.List[object]]$Entries,
+    [string]$Category,
+    [string]$SourceKind,
+    [string]$Source,
+    [string]$Identifier
+  )
+
+  if ($null -eq $Identifier -or [string]$Identifier -eq '') {
+    return
+  }
+  [void]$Entries.Add([pscustomobject]@{
+    Category = $Category
+    SourceKind = $SourceKind
+    Source = $Source
+    RawIdentifier = [string]$Identifier
+    IsReal = Test-RealPuid ([string]$Identifier)
+  })
+}
+
+function Get-GdidLocationLabel {
+  param([object]$Entry)
+
+  if ($Entry.SourceKind -eq 'Lid') {
+    if ($Entry.Source -eq 'TargetUserLid') { return 'current user LID' }
+    if ($Entry.Source -eq 'DefaultLid') { return 'default-profile machine LID' }
+    if ($Entry.Source -eq 'SystemLid') { return 'SYSTEM machine LID' }
+    return 'LID store'
+  }
+  if ($Entry.SourceKind -eq 'ImmersiveProperty') {
+    return 'current user Immersive Property'
+  }
+  if ($Entry.SourceKind -eq 'TokenDeviceId') {
+    return 'current user device-token copy'
+  }
+  if ($Entry.SourceKind -eq 'NegativeCache') {
+    return 'machine NegativeCache'
+  }
+  return [string]$Entry.SourceKind
+}
+
+function Get-GdidInventory {
+  param([object]$Model)
+
+  $entries = New-Object System.Collections.Generic.List[object]
+  $errors = New-Object System.Collections.Generic.List[string]
+  $propertyNames = New-Object System.Collections.Generic.List[string]
+  $tokenKeys = New-Object System.Collections.Generic.List[object]
+  $negativeCacheKeys = New-Object System.Collections.Generic.List[object]
+  $cacheArtifacts = New-Object System.Collections.Generic.List[object]
+  foreach ($modelError in $Model.Errors) {
+    [void]$errors.Add($modelError)
+  }
+
+  foreach ($lidSource in $Model.Lids) {
+    try {
+      if (Test-Path -LiteralPath $lidSource.Path -ErrorAction Stop) {
+        $key = Get-Item -LiteralPath $lidSource.Path -ErrorAction Stop
+        $value = $key.GetValue(
+          'LID',
+          $null,
+          [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+        if ($null -ne $value) {
+          Add-InventoryEntry `
+            -Entries $entries `
+            -Category 'Active' `
+            -SourceKind 'Lid' `
+            -Source $lidSource.Name `
+            -Identifier ([string]$value)
+        }
+      }
+    } catch {
+      [void]$errors.Add(('{0}: {1}' -f $lidSource.Name, $_.Exception.Message))
+    }
+  }
+
+  try {
+    if (Test-Path -LiteralPath $Model.PropertyPath -ErrorAction Stop) {
+      $key = Get-Item -LiteralPath $Model.PropertyPath -ErrorAction Stop
+      foreach ($name in @($key.GetValueNames())) {
+        [void]$propertyNames.Add($name)
+        Add-InventoryEntry `
+          -Entries $entries `
+          -Category 'Active' `
+          -SourceKind 'ImmersiveProperty' `
+          -Source 'TargetUserProperty' `
+          -Identifier $name
+      }
+    }
+  } catch {
+    [void]$errors.Add(('TargetUserProperty: {0}' -f $_.Exception.Message))
+  }
+
+  try {
+    if (Test-Path -LiteralPath $Model.TokenPath -ErrorAction Stop) {
+      foreach (
+        $tokenKey in @(
+          Get-ChildItem -LiteralPath $Model.TokenPath -ErrorAction Stop
+        )
+      ) {
+        $item = Get-Item -LiteralPath $tokenKey.PSPath -ErrorAction Stop
+        $valueNames = @($item.GetValueNames())
+        [void]$tokenKeys.Add([pscustomobject]@{
+          Path = $tokenKey.PSPath
+          Name = $tokenKey.PSChildName
+          HasDeviceId = $valueNames -contains 'DeviceId'
+          HasDeviceTicket = $valueNames -contains 'DeviceTicket'
+        })
+        if ($valueNames -contains 'DeviceId') {
+          $deviceId = $item.GetValue(
+            'DeviceId',
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+          )
+          if ($null -ne $deviceId) {
+            Add-InventoryEntry `
+              -Entries $entries `
+              -Category 'Active' `
+              -SourceKind 'TokenDeviceId' `
+              -Source ('Token:{0}' -f $tokenKey.PSChildName) `
+              -Identifier ([string]$deviceId)
+          }
+        }
+      }
+    }
+  } catch {
+    [void]$errors.Add(('TargetUserToken: {0}' -f $_.Exception.Message))
+  }
+
+  try {
+    if (Test-Path -LiteralPath $Model.NegativeCachePath -ErrorAction Stop) {
+      foreach (
+        $cacheKey in @(
+          Get-ChildItem -LiteralPath $Model.NegativeCachePath -ErrorAction Stop
+        )
+      ) {
+        $puids = @(Get-EmbeddedRealPuids $cacheKey.PSChildName)
+        if ($puids.Count -gt 0) {
+          [void]$negativeCacheKeys.Add([pscustomobject]@{
+            Path = $cacheKey.PSPath
+            Name = $cacheKey.PSChildName
+            Puids = $puids
+          })
+          foreach ($puid in $puids) {
+            Add-InventoryEntry `
+              -Entries $entries `
+              -Category 'ResidualCache' `
+              -SourceKind 'NegativeCache' `
+              -Source 'MachineNegativeCache' `
+              -Identifier $puid
+          }
+        }
+      }
+    }
+  } catch {
+    [void]$errors.Add(('MachineNegativeCache: {0}' -f $_.Exception.Message))
+  }
+
+  foreach ($cachePath in $Model.CachePaths) {
+    try {
+      $count = 0
+      if (Test-Path -LiteralPath $cachePath.Path -ErrorAction Stop) {
+        $count = @(
+          Get-ChildItem -LiteralPath $cachePath.Path -Force -ErrorAction Stop
+        ).Count
+      }
+      [void]$cacheArtifacts.Add([pscustomobject]@{
+        Name = $cachePath.Name
+        Count = $count
+        Present = $count -gt 0
+      })
+    } catch {
+      [void]$errors.Add(('{0}Cache: {1}' -f $cachePath.Name, $_.Exception.Message))
+    }
+  }
+
+  $activeReal = @(
+    $entries |
+      Where-Object { $_.Category -eq 'Active' -and $_.IsReal } |
+      ForEach-Object { $_.RawIdentifier.ToUpperInvariant() } |
+      Select-Object -Unique
+  )
+  $residualReal = @(
+    $entries |
+      Where-Object { $_.Category -eq 'ResidualCache' -and $_.IsReal } |
+      ForEach-Object { $_.RawIdentifier.ToUpperInvariant() } |
+      Select-Object -Unique
+  )
+  $allReal = @($activeReal + $residualReal | Select-Object -Unique)
+
+  return [pscustomobject]@{
+    Entries = $entries.ToArray()
+    Errors = $errors.ToArray()
+    PropertyValueNames = $propertyNames.ToArray()
+    TokenKeys = $tokenKeys.ToArray()
+    NegativeCacheKeys = $negativeCacheKeys.ToArray()
+    CacheArtifacts = $cacheArtifacts.ToArray()
+    ActiveRealPuids = $activeReal
+    ResidualRealPuids = $residualReal
+    AllRealPuids = $allReal
+  }
+}
+
+function Get-GdidServiceSnapshot {
+  try {
+    $services = @(
+      Get-Service -ErrorAction Stop |
+        Where-Object {
+          $_.Name -match '^(wlidsvc|CDPSvc|TokenBroker|CDPUserSvc.*)$'
+        } |
+        Sort-Object Name
+    )
+    $unstable = @(
+      $services |
+        Where-Object { $_.Status -notin @('Running', 'Stopped') }
+    )
+    if ($unstable.Count -gt 0) {
+      throw 'Identity services are in transitional/paused states: {0}' -f (
+        ($unstable | ForEach-Object { '{0}={1}' -f $_.Name, $_.Status }) -join ','
+      )
+    }
+    return [pscustomobject]@{
+      Success = $true
+      Error = $null
+      Services = @(
+        $services | ForEach-Object {
+          [pscustomobject]@{
+            Name = $_.Name
+            WasRunning = $_.Status -eq 'Running'
+            StartType = [string]$_.StartType
+          }
+        }
+      )
+    }
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      Error = $_.Exception.Message
+      Services = @()
+    }
+  }
+}
+
+function Add-OperationResult {
+  param(
+    [System.Collections.Generic.List[object]]$Results,
+    [string]$OperationName,
+    [scriptblock]$Action,
+    [switch]$DryRun
+  )
+
+  if ($DryRun) {
+    [void]$Results.Add([pscustomobject]@{
+      Name = $OperationName
+      Success = $true
+      Planned = $true
+      Error = $null
+    })
+    return $true
+  }
+
+  try {
+    & $Action | Out-Null
+    [void]$Results.Add([pscustomobject]@{
+      Name = $OperationName
+      Success = $true
+      Planned = $false
+      Error = $null
+    })
+    return $true
+  } catch {
+    [void]$Results.Add([pscustomobject]@{
+      Name = $OperationName
+      Success = $false
+      Planned = $false
+      Error = $_.Exception.Message
+    })
+    return $false
+  }
+}
+
+function Stop-GdidServices {
+  param(
+    [object[]]$ServiceStates,
+    [System.Collections.Generic.List[object]]$Results,
+    [switch]$DryRun
+  )
+
+  $success = $true
+  foreach ($state in $ServiceStates | Where-Object { $_.WasRunning }) {
+    $name = $state.Name
+    $ok = Add-OperationResult `
+      -Results $Results `
+      -OperationName ('StopService:{0}' -f $name) `
+      -DryRun:$DryRun `
+      -Action {
+        $service = Get-Service -Name $name -ErrorAction Stop
+        if ($service.Status -ne 'Stopped') {
+          Stop-Service -Name $name -Force -ErrorAction Stop
+          $service = Get-Service -Name $name -ErrorAction Stop
+          $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+      }
+    if (-not $ok) {
+      $success = $false
+    }
+  }
+  return $success
+}
+
+function Stop-AllGdidServices {
+  param(
+    [object[]]$ServiceStates,
+    [System.Collections.Generic.List[object]]$Results
+  )
+
+  $success = $true
+  foreach ($state in $ServiceStates) {
+    $name = $state.Name
+    $ok = Add-OperationResult `
+      -Results $Results `
+      -OperationName ('FailClosedStopService:{0}' -f $name) `
+      -Action {
+        $service = Get-Service -Name $name -ErrorAction Stop
+        if ($service.Status -ne 'Stopped') {
+          Stop-Service -Name $name -Force -ErrorAction Stop
+          $service = Get-Service -Name $name -ErrorAction Stop
+          $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+      }
+    if (-not $ok) {
+      $success = $false
+    }
+  }
+  return $success
+}
+
+function Set-FailClosedMintBarrier {
+  param(
+    [object[]]$ServiceStates,
+    [System.Collections.Generic.List[object]]$Results
+  )
+
+  $stageOk = Add-OperationResult `
+    -Results $Results `
+    -OperationName 'EnsureFailClosedMintServiceRule' `
+    -Action {
+      New-StagingMintServiceRule
+      if (-not (Test-StagingMintServiceRuleEnforced)) {
+        throw 'Staging wlidsvc deny is not fully enforced.'
+      }
+    }
+  $servicesStopped = Stop-AllGdidServices `
+    -ServiceStates $ServiceStates `
+    -Results $Results
+  return ($stageOk -and $servicesStopped)
+}
+
+function Resume-GdidServices {
+  param(
+    [object[]]$ServiceStates,
+    [System.Collections.Generic.List[object]]$Results,
+    [switch]$DryRun
+  )
+
+  $success = $true
+  foreach ($state in $ServiceStates | Where-Object { $_.WasRunning }) {
+    $name = $state.Name
+    $ok = Add-OperationResult `
+      -Results $Results `
+      -OperationName ('ResumeService:{0}' -f $name) `
+      -DryRun:$DryRun `
+      -Action {
+        $service = Get-Service -Name $name -ErrorAction Stop
+        if ($service.Status -ne 'Running') {
+          Start-Service -Name $name -ErrorAction Stop
+          $service = Get-Service -Name $name -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+        }
+      }
+    if (-not $ok) {
+      $success = $false
+    }
+  }
+  return $success
+}
+
+function Start-GdidSettleServices {
+  param(
+    [object[]]$ServiceStates,
+    [System.Collections.Generic.List[object]]$Results
+  )
+
+  $temporaryNames = New-Object System.Collections.Generic.List[string]
+  $success = $true
+  foreach (
+    $state in $ServiceStates |
+      Where-Object { -not $_.WasRunning -and $_.StartType -ne 'Disabled' }
+  ) {
+    $name = $state.Name
+    $ok = Add-OperationResult `
+      -Results $Results `
+      -OperationName ('SettleStartService:{0}' -f $name) `
+      -Action {
+        $service = Get-Service -Name $name -ErrorAction Stop
+        if ($service.Status -ne 'Running') {
+          Start-Service -Name $name -ErrorAction Stop
+        }
+      }
+    if ($ok) {
+      [void]$temporaryNames.Add($name)
+    } else {
+      $success = $false
+    }
+  }
+
+  return [pscustomobject]@{
+    Success = $success
+    TemporaryNames = $temporaryNames.ToArray()
+  }
+}
+
+function Stop-GdidSettleServices {
+  param(
+    [string[]]$ServiceNames,
+    [System.Collections.Generic.List[object]]$Results
+  )
+
+  $success = $true
+  foreach ($name in $ServiceNames) {
+    $serviceName = $name
+    $ok = Add-OperationResult `
+      -Results $Results `
+      -OperationName ('SettleRestoreService:{0}' -f $serviceName) `
+      -Action {
+        $service = Get-Service -Name $serviceName -ErrorAction Stop
+        if ($service.Status -ne 'Stopped') {
+          Stop-Service -Name $serviceName -Force -ErrorAction Stop
+          $service = Get-Service -Name $serviceName -ErrorAction Stop
+          $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+      }
+    if (-not $ok) {
+      $success = $false
+    }
+  }
+  return $success
+}
+
+function Test-GdidServiceRestoration {
+  param(
+    [object[]]$ServiceStates,
+    [System.Collections.Generic.List[object]]$Results
+  )
+
+  $success = $true
+  foreach ($state in $ServiceStates) {
+    $name = $state.Name
+    $expected = $(if ($state.WasRunning) { 'Running' } else { 'Stopped' })
+    $ok = Add-OperationResult `
+      -Results $Results `
+      -OperationName ('VerifyServiceState:{0}' -f $name) `
+      -Action {
+        $service = Get-Service -Name $name -ErrorAction Stop
+        if ($service.Status.ToString() -ne $expected) {
+          throw 'Expected {0}; observed {1}.' -f $expected, $service.Status
+        }
+      }
+    if (-not $ok) {
+      $success = $false
+    }
+  }
+  return $success
+}
+
+function Invoke-IdentityStoreChanges {
+  param(
+    [object]$Model,
+    [object]$Before,
+    [string[]]$CapturedPuids,
+    [ValidateSet('Wipe', 'Decoy')]
+    [string]$Mode,
+    [AllowNull()][string]$DecoyLid,
+    [System.Collections.Generic.List[object]]$Results,
+    [switch]$DryRun
+  )
+
+  foreach ($propertyName in $Before.PropertyValueNames) {
+    $name = $propertyName
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName ('ClearProperty:{0}' -f (Get-Sha256Hex $name).Substring(0, 8)) `
+      -DryRun:$DryRun `
+      -Action {
+        $propertyKey = [Microsoft.Win32.Registry]::Users.OpenSubKey(
+          $Model.PropertyNativePath,
+          $true
+        )
+        if (-not $propertyKey) {
+          throw 'Target-user Immersive Property key could not be opened writable.'
+        }
+        try {
+          $propertyKey.DeleteValue($name, $false)
+        } finally {
+          $propertyKey.Close()
+        }
+      })
+  }
+
+  foreach ($tokenKey in $Before.TokenKeys) {
+    $path = $tokenKey.Path
+    $tokenName = $tokenKey.Name
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName ('ClearToken:{0}' -f (Get-Sha256Hex $tokenName).Substring(0, 8)) `
+      -DryRun:$DryRun `
+      -Action {
+        $key = Get-Item -LiteralPath $path -ErrorAction Stop
+        $valueNames = @($key.GetValueNames())
+        if ($valueNames -contains 'DeviceTicket') {
+          Remove-ItemProperty `
+            -LiteralPath $path `
+            -Name 'DeviceTicket' `
+            -ErrorAction Stop
+        }
+        if ($valueNames -contains 'DeviceId') {
+          Remove-ItemProperty `
+            -LiteralPath $path `
+            -Name 'DeviceId' `
+            -ErrorAction Stop
+        }
+        if ($Mode -eq 'Decoy' -and $tokenKey.HasDeviceId) {
+          New-ItemProperty `
+            -LiteralPath $path `
+            -Name 'DeviceId' `
+            -Value $DecoyLid `
+            -PropertyType String `
+            -Force `
+            -ErrorAction Stop | Out-Null
+        }
+      })
+  }
+
+  foreach ($cacheKey in $Before.NegativeCacheKeys) {
+    $matchesCaptured = $false
+    foreach ($puid in $cacheKey.Puids) {
+      if ($CapturedPuids -contains $puid.ToUpperInvariant()) {
+        $matchesCaptured = $true
+        break
+      }
+    }
+    if (-not $matchesCaptured) {
       continue
     }
-    New-NetFirewallRule -DisplayName $ruleName -Direction Outbound -Action Block -RemoteAddress $ips -Protocol Any | Out-Null
-    Write-Output "Firewall block $h ($($ips.Count) IPs)"
+
+    $path = $cacheKey.Path
+    $cacheName = $cacheKey.Name
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName ('ClearNegativeCache:{0}' -f (Get-Sha256Hex $cacheName).Substring(0, 8)) `
+      -DryRun:$DryRun `
+      -Action {
+        Remove-Item `
+          -LiteralPath $path `
+          -Recurse `
+          -Force `
+          -ErrorAction Stop
+      })
   }
-  Write-Output "HostsBlockPresent=$(Test-HostsBlockPresent)"
+
+  foreach ($lidSource in $Model.Lids) {
+    $path = $lidSource.Path
+    $sourceName = $lidSource.Name
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName ('SetLid:{0}' -f $sourceName) `
+      -DryRun:$DryRun `
+      -Action {
+        if ($Mode -eq 'Wipe') {
+          if (Test-Path -LiteralPath $path -ErrorAction Stop) {
+            $key = Get-Item -LiteralPath $path -ErrorAction Stop
+            if (@($key.GetValueNames()) -contains 'LID') {
+              Remove-ItemProperty `
+                -LiteralPath $path `
+                -Name 'LID' `
+                -ErrorAction Stop
+            }
+          }
+        } else {
+          if (-not (Test-Path -LiteralPath $path -ErrorAction Stop)) {
+            New-Item -Path $path -Force -ErrorAction Stop | Out-Null
+          }
+          New-ItemProperty `
+            -LiteralPath $path `
+            -Name 'LID' `
+            -Value $DecoyLid `
+            -PropertyType String `
+            -Force `
+            -ErrorAction Stop | Out-Null
+        }
+      })
+  }
+
+  foreach ($cachePath in $Model.CachePaths) {
+    $path = $cachePath.Path
+    $cacheName = $cachePath.Name
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName ('ClearFiles:{0}' -f $cacheName) `
+      -DryRun:$DryRun `
+      -Action {
+        if (Test-Path -LiteralPath $path -ErrorAction Stop) {
+          $root = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+          if (
+            ($root.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+          ) {
+            throw '{0} cache root became a reparse point.' -f $cacheName
+          }
+          foreach (
+            $child in @(
+              Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop
+            )
+          ) {
+            if (
+              ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+            ) {
+              throw '{0} cache acquired a reparse-point child.' -f $cacheName
+            }
+            Remove-Item `
+              -LiteralPath $child.FullName `
+              -Recurse `
+              -Force `
+              -ErrorAction Stop
+          }
+        }
+      })
+  }
 }
 
-function Invoke-Unblock {
-  if ($DryRun) {
-    Write-Output 'DryRun would remove hosts marker region and degdid firewall rules.'
-    return
-  }
-  $c = @(Get-Content $HostsPath -EA SilentlyContinue)
-  $out = New-Object System.Collections.Generic.List[string]
-  $skip = $false
-  foreach ($line in $c) {
-    if ($line -eq $MarkerBegin) { $skip = $true; continue }
-    if ($line -eq $MarkerEnd) { $skip = $false; continue }
-    if (-not $skip) { $out.Add($line) }
-  }
-  Set-Content -Path $HostsPath -Value $out -Encoding ASCII
-  ipconfig /flushdns | Out-Null
-  Get-NetFirewallRule -DisplayName "$RulePrefix*" -EA SilentlyContinue | Remove-NetFirewallRule
-  Write-Output 'Hosts block and degdid firewall rules removed.'
-}
+function Test-WipePostcondition {
+  param(
+    [object]$Inventory,
+    [string[]]$CapturedPuids,
+    [ValidateSet('Wipe', 'Decoy')]
+    [string]$Mode,
+    [AllowNull()][string]$DecoyLid,
+    [object]$Model
+  )
 
-function Show-Status {
-  $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-  Write-Output "=== degdid status $(Get-Date -Format o) ==="
-  Write-Output "Build=$($cv.CurrentBuild) Display=$($cv.DisplayVersion) LooksOnline=$(Test-LooksOnline)"
-  Write-Output '--- LID stores ---'
-  $any = $false
-  foreach ($p in $LidPaths) {
-    $lid = Get-LidAt $p
-    if ($lid) { $any = $true }
-    $g = ConvertTo-Gdid $lid
-    Write-Output ("{0} HasLid={1} Lid={2} Gdid={3}" -f $p, [bool]$lid, $(if ($lid) { $lid } else { '(none)' }), $(if ($g) { $g } else { '-' }))
+  $reasons = New-Object System.Collections.Generic.List[string]
+  if ($Inventory.Errors.Count -gt 0) {
+    [void]$reasons.Add('Post-wait inventory had read errors.')
   }
-  $blobs = Get-ImmersivePropertyCount
-  Write-Output "ImmersivePropertyBlobs=$blobs (rehydrate risk if >0 while LID cleared)"
-  $tok = 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token'
-  $did = 0
-  if (Test-Path $tok) {
-    Get-ChildItem $tok -EA SilentlyContinue | ForEach-Object {
-      if ($null -ne (Get-ItemProperty $_.PSPath -EA SilentlyContinue).DeviceId) { $did++ }
+
+  $capturedRemaining = @(
+    $Inventory.AllRealPuids |
+      Where-Object { $CapturedPuids -contains $_.ToUpperInvariant() }
+  )
+  if ($capturedRemaining.Count -gt 0) {
+    [void]$reasons.Add('A captured old PUID remains.')
+  }
+
+  if ($Mode -eq 'Wipe') {
+    if (
+      @(
+        $Inventory.Entries |
+          Where-Object {
+            $_.Category -eq 'Active' -and
+            ($_.SourceKind -eq 'Lid' -or $_.SourceKind -eq 'TokenDeviceId')
+          }
+      ).Count -gt 0
+    ) {
+      [void]$reasons.Add('An LID or Token DeviceId value remains.')
+    }
+    if ($Inventory.PropertyValueNames.Count -gt 0) {
+      [void]$reasons.Add('Immersive Property values remain.')
+    }
+    if (@($Inventory.TokenKeys | Where-Object { $_.HasDeviceTicket }).Count -gt 0) {
+      [void]$reasons.Add('A Token DeviceTicket remains.')
+    }
+    if ($Inventory.ActiveRealPuids.Count -gt 0) {
+      [void]$reasons.Add('A real-shaped PUID exists in an active store.')
+    }
+    if ($Inventory.ResidualRealPuids.Count -gt 0) {
+      [void]$reasons.Add('A real-shaped PUID exists in a residual registry cache.')
+    }
+  } else {
+    $activeEntries = @(
+      $Inventory.Entries | Where-Object { $_.Category -eq 'Active' }
+    )
+    $identityEntries = @(
+      $activeEntries |
+        Where-Object {
+          $_.SourceKind -eq 'Lid' -or
+          $_.SourceKind -eq 'TokenDeviceId' -or
+          ($_.SourceKind -eq 'ImmersiveProperty' -and $_.IsReal)
+        }
+    )
+    if (
+      $identityEntries.Count -eq 0 -or
+      @(
+        $identityEntries |
+          Where-Object { $_.RawIdentifier -ine $DecoyLid }
+      ).Count -gt 0
+    ) {
+      [void]$reasons.Add('Active identifiers are not consistently the generated decoy.')
+    }
+    foreach ($lidSource in $Model.Lids) {
+      $matching = @(
+        $activeEntries |
+          Where-Object {
+            $_.SourceKind -eq 'Lid' -and
+            $_.Source -eq $lidSource.Name -and
+            $_.RawIdentifier -ieq $DecoyLid
+          }
+      )
+      if ($matching.Count -ne 1) {
+        [void]$reasons.Add(('Decoy is missing from {0}.' -f $lidSource.Name))
+      }
     }
   }
-  Write-Output "TokenDeviceIdKeys=$did"
-  Write-Output "HostsBlockPresent=$(Test-HostsBlockPresent)"
-  $fw = @(Get-NetFirewallRule -DisplayName "$RulePrefix*" -EA SilentlyContinue)
-  Write-Output "FirewallBlockRules=$($fw.Count)"
-  if ($any) {
-    Write-Output 'Verdict: local GDID/LID PRESENT. Consider: .\degdid.ps1 -Protect'
-  } elseif ($blobs -gt 0 -or $did -gt 0) {
-    Write-Output 'Verdict: no LID, but leftover Immersive/Token state. Consider: .\degdid.ps1 -Protect'
-  } elseif (-not (Test-HostsBlockPresent)) {
-    Write-Output 'Verdict: no local LID, but registration NOT blocked - a future DeviceAdd can mint one.'
-  } else {
-    Write-Output 'Verdict: no local LID + registration blocks active (good for starve path).'
+
+  return [pscustomobject]@{
+    Success = $reasons.Count -eq 0
+    Reasons = $reasons.ToArray()
   }
 }
 
-Write-Output "=== degdid DryRun=$DryRun $(Get-Date -Format o) ==="
+function Invoke-IdentityMutation {
+  param(
+    [ValidateSet('Wipe', 'Decoy')]
+    [string]$Mode,
+    [object]$Target,
+    [switch]$DryRun
+  )
 
-if ($Status) {
-  Show-Status
-  exit 0
+  $results = New-Object System.Collections.Generic.List[object]
+  $model = Get-GdidSourceModel -Target $Target
+  if ($model.Errors.Count -gt 0) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Target source paths could not be resolved; no mutation was attempted.'
+      CapturedCount = 0
+      Decoy = $null
+      Results = @()
+      Postcondition = $null
+      Errors = @($model.Errors)
+    }
+  }
+  $sourceSafety = Test-GdidSourceModelSafety -Model $model
+  if (-not $sourceSafety.Success) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Target cache paths failed safety validation; no mutation was attempted.'
+      CapturedCount = 0
+      Decoy = $null
+      Results = @()
+      Postcondition = $null
+      Errors = @($sourceSafety.Errors)
+    }
+  }
+  $before = Get-GdidInventory -Model $model
+  if ($before.Errors.Count -gt 0) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Pre-mutation inventory failed; no identity mutation was attempted.'
+      CapturedCount = $before.AllRealPuids.Count
+      Decoy = $null
+      Results = @()
+      Postcondition = $null
+      Errors = @($before.Errors)
+    }
+  }
+
+  $captured = @(
+    $before.AllRealPuids |
+      ForEach-Object { $_.ToUpperInvariant() } |
+      Select-Object -Unique
+  )
+  $decoy = $null
+  if ($Mode -eq 'Decoy') {
+    do {
+      $decoy = New-DecoyLid
+    } while ($captured -contains $decoy)
+  }
+
+  if ($DryRun) {
+    return [pscustomobject]@{
+      Success = $true
+      ExitCode = 0
+      Message = 'DryRun planned identity mutation; no state was changed.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = @()
+      Postcondition = $null
+      Errors = @()
+    }
+  }
+
+  $snapshot = Get-GdidServiceSnapshot
+  if (-not $snapshot.Success) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Identity services could not be inventoried; no mutation was attempted.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = @()
+      Postcondition = $null
+      Errors = @($snapshot.Error)
+    }
+  }
+
+  $stopped = Stop-GdidServices -ServiceStates $snapshot.Services -Results $results
+  if (-not $stopped) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Quiescing identity services failed; identity stores were not changed and service state was left fail-closed.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = $results.ToArray()
+      Postcondition = $null
+      Errors = @(
+        $results |
+          Where-Object { -not $_.Success } |
+          ForEach-Object { '{0}: {1}' -f $_.Name, $_.Error }
+      )
+    }
+  }
+
+  $quiescedInventory = Get-GdidInventory -Model $model
+  if ($quiescedInventory.Errors.Count -gt 0) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Quiesced inventory failed; identity stores were not changed and services remain quiesced.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = $results.ToArray()
+      Postcondition = $null
+      Errors = @($quiescedInventory.Errors)
+    }
+  }
+
+  $before = $quiescedInventory
+  $captured = @(
+    $captured + @(
+      $before.AllRealPuids |
+        ForEach-Object { $_.ToUpperInvariant() }
+    ) | Select-Object -Unique
+  )
+  if ($Mode -eq 'Decoy') {
+    do {
+      $decoy = New-DecoyLid
+    } while ($captured -contains $decoy)
+  }
+
+  $preWriteGate = Get-ProtectionGate
+  if (-not $preWriteGate.Healthy) {
+    $barrier = Set-FailClosedMintBarrier `
+      -ServiceStates $snapshot.Services `
+      -Results $results
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 3
+      Message = 'Block verification failed immediately before identity writes; services remain quiesced.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = $results.ToArray()
+      Postcondition = $null
+      Errors = @(
+        'Identity stores were not changed.',
+        $(if (-not $barrier) { 'Fail-closed mint barrier was incomplete.' })
+      ) | Where-Object { $_ }
+    }
+  }
+
+  $preWriteSafety = Test-GdidSourceModelSafety -Model $model
+  if (-not $preWriteSafety.Success) {
+    $barrier = Set-FailClosedMintBarrier `
+      -ServiceStates $snapshot.Services `
+      -Results $results
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Cache path safety changed before identity writes; services remain quiesced.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = $results.ToArray()
+      Postcondition = $null
+      Errors = @($preWriteSafety.Errors) + @(
+        $(if (-not $barrier) { 'Fail-closed mint barrier was incomplete.' })
+      ) | Where-Object { $_ }
+    }
+  }
+
+  Invoke-IdentityStoreChanges `
+    -Model $model `
+    -Before $before `
+    -CapturedPuids $captured `
+    -Mode $Mode `
+    -DecoyLid $decoy `
+    -Results $results
+
+  $gate = Get-ProtectionGate
+  if (-not $gate.Healthy) {
+    $barrier = Set-FailClosedMintBarrier `
+      -ServiceStates $snapshot.Services `
+      -Results $results
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 3
+      Message = 'Block verification failed before service settle; services remain quiesced.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = $results.ToArray()
+      Postcondition = $null
+      Errors = @(
+        'Registration block gate was lost after identity writes.',
+        $(if (-not $barrier) { 'Fail-closed mint barrier was incomplete.' })
+      ) | Where-Object { $_ }
+    }
+  }
+
+  $resumed = Resume-GdidServices -ServiceStates $snapshot.Services -Results $results
+  $settle = Start-GdidSettleServices `
+    -ServiceStates $snapshot.Services `
+    -Results $results
+  Start-Sleep -Seconds $script:SettleSeconds
+  $postSettleGate = Get-ProtectionGate
+  if ($postSettleGate.Healthy) {
+    $settleRestored = Stop-GdidSettleServices `
+      -ServiceNames $settle.TemporaryNames `
+      -Results $results
+    $serviceStateRestored = Test-GdidServiceRestoration `
+      -ServiceStates $snapshot.Services `
+      -Results $results
+  } else {
+    $settleRestored = Set-FailClosedMintBarrier `
+      -ServiceStates $snapshot.Services `
+      -Results $results
+    $serviceStateRestored = $false
+  }
+
+  # The postcondition inventory is deliberately last, after temporary settle
+  # services are stopped or the fail-closed quiesce has been re-established.
+  $after = Get-GdidInventory -Model $model
+  $postcondition = Test-WipePostcondition `
+    -Inventory $after `
+    -CapturedPuids $captured `
+    -Mode $Mode `
+    -DecoyLid $decoy `
+    -Model $model
+
+  $operationFailures = @($results | Where-Object { -not $_.Success })
+  $gateErrors = @()
+  if (-not $postSettleGate.Healthy) {
+    $gateErrors = @(
+      'Registration block gate was lost during settle; identity services were left fail-closed.'
+    )
+  }
+  $success = (
+    $resumed -and
+    $settle.Success -and
+    $settleRestored -and
+    $serviceStateRestored -and
+    $postSettleGate.Healthy -and
+    $operationFailures.Count -eq 0 -and
+    $postcondition.Success
+  )
+
+  $errors = @(
+    $operationFailures |
+      ForEach-Object { '{0}: {1}' -f $_.Name, $_.Error }
+  ) + @($after.Errors) + @($postcondition.Reasons) + $gateErrors
+
+  return [pscustomobject]@{
+    Success = $success
+    ExitCode = $(if ($success) {
+      0
+    } elseif (-not $postSettleGate.Healthy) {
+      3
+    } else {
+      5
+    })
+    Message = $(if ($success) {
+      '{0} completed and passed the post-wait inventory.' -f $Mode
+    } elseif (-not $postSettleGate.Healthy) {
+      '{0} failed because the block gate was lost; identity services remain quiesced.' -f $Mode
+    } else {
+      '{0} failed operation accounting or its postcondition.' -f $Mode
+    })
+    CapturedCount = $captured.Count
+    Decoy = $decoy
+    Results = $results.ToArray()
+    Postcondition = $postcondition
+    Errors = @($errors | Where-Object { $_ })
+  }
 }
 
-if ($Unblock) {
-  Invoke-Unblock
-  Write-Output 'Done. Warning: without blocks, Windows may mint a real server GDID later.'
-  exit 0
+function Get-GdidVerdict {
+  param(
+    [bool]$HasError,
+    [bool]$EnvironmentSupported,
+    [bool]$HasRealGdid,
+    [bool]$BlockHealthy
+  )
+
+  if ($HasError) {
+    return 'Error'
+  }
+  if (-not $EnvironmentSupported) {
+    return 'UnsupportedEnvironment'
+  }
+  if ($HasRealGdid) {
+    return 'RealGdidPresent'
+  }
+  if (-not $BlockHealthy) {
+    return 'BlockDegraded'
+  }
+  return 'ProtectedNoRealGdid'
 }
 
-if ($Block) {
-  Invoke-Block
-  exit 0
+function Get-StatusHostsState {
+  try {
+    $document = Read-HostsDocument
+    return [pscustomobject]@{
+      State = $document.State.State
+      Canonical = $document.State.Canonical
+      Encoding = $document.EncodingName
+      IPv4Count = $document.State.IPv4Count
+      IPv6Count = $document.State.IPv6Count
+      MissingIPv4 = @($document.State.MissingIPv4)
+      MissingIPv6 = @($document.State.MissingIPv6)
+      Error = $null
+      InternalState = $document.State
+    }
+  } catch {
+    $internal = [pscustomobject]@{
+      State = 'Error'
+      Canonical = $false
+      IPv4Count = 0
+      IPv6Count = 0
+      MissingIPv4 = @($script:BlockHosts)
+      MissingIPv6 = @($script:BlockHosts)
+    }
+    return [pscustomobject]@{
+      State = 'Error'
+      Canonical = $false
+      Encoding = $null
+      IPv4Count = 0
+      IPv6Count = 0
+      MissingIPv4 = @($script:BlockHosts)
+      MissingIPv6 = @($script:BlockHosts)
+      Error = $_.Exception.Message
+      InternalState = $internal
+    }
+  }
 }
 
-if ($Protect) {
-  Write-Output 'Protect: applying registration blocks, then local mutate...'
-  Invoke-Block
-  if ($UseDecoy) { Invoke-Decoy } else { Invoke-Wipe }
-  Write-Output 'Done. Re-run: .\degdid.ps1 -Status'
-  exit 0
+function Format-StatusErrorText {
+  param(
+    [AllowNull()][string]$Text,
+    [AllowNull()][object]$Target,
+    [switch]$Show
+  )
+
+  if (-not $Text -or $Show) {
+    return $Text
+  }
+
+  $result = [regex]::Replace(
+    $Text,
+    '(?i)(?<![0-9a-f])0018[0-9a-f]{12}(?![0-9a-f])',
+    '<puid>'
+  )
+  $result = [regex]::Replace(
+    $result,
+    '(?i)S-1-5-21-\d+-\d+-\d+-\d+',
+    '<sid>'
+  )
+
+  if ($null -ne $Target) {
+    $privateValues = @(
+      [pscustomobject]@{ Value = $Target.ProfilePath; Replacement = '<profile>' },
+      [pscustomobject]@{ Value = $Target.AccountName; Replacement = '<account>' },
+      [pscustomobject]@{ Value = $Target.Sid; Replacement = '<sid>' }
+    )
+    foreach ($item in $privateValues) {
+      if ($item.Value) {
+        $result = [regex]::Replace(
+          $result,
+          [regex]::Escape([string]$item.Value),
+          [string]$item.Replacement,
+          [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+      }
+    }
+  }
+
+  return [regex]::Replace(
+    $result,
+    '(?i)[a-z]:\\Users\\[^\\\s]+',
+    '<profile>'
+  )
 }
 
-# Wipe / Decoy alone - warn if online without blocks
-$online = Test-LooksOnline
-$blocked = Test-HostsBlockPresent
-if ($online -and -not $blocked) {
-  Write-Warning 'System looks online and registration is NOT blocked. A wipe/decoy alone can be followed by a server remint. Prefer: .\degdid.ps1 -Protect'
+function Get-DegdidStatus {
+  param([switch]$ShowIdentifier)
+
+  $environment = Get-EnvironmentState
+  $hosts = Get-StatusHostsState
+  $firewall = Get-FirewallState
+  $mintPath = Get-MintPathState `
+    -HostsState $hosts.InternalState `
+    -FirewallState $firewall
+
+  $inventory = $null
+  if ($null -ne $environment.Target) {
+    $model = Get-GdidSourceModel -Target $environment.Target
+    $inventory = Get-GdidInventory -Model $model
+  } else {
+    $inventory = [pscustomobject]@{
+      Entries = @()
+      Errors = @()
+      CacheArtifacts = @()
+      ActiveRealPuids = @()
+      ResidualRealPuids = @()
+      AllRealPuids = @()
+    }
+  }
+
+  $environmentSupported = (
+    $environment.UnsupportedReasons.Count -eq 0 -and
+    $environment.TargetFailureReasons.Count -eq 0
+  )
+  $blockHealthy = (
+    $hosts.State -eq 'Valid' -and
+    $firewall.Health -eq 'Valid' -and
+    $mintPath.Health -eq 'Valid'
+  )
+  $hasReal = $inventory.AllRealPuids.Count -gt 0
+  $deviceTicketCount = @(
+    $inventory.TokenKeys | Where-Object { $_.HasDeviceTicket }
+  ).Count
+  $unknownActiveIdentityCount = @(
+    $inventory.Entries |
+      Where-Object { $_.Category -eq 'Active' -and -not $_.IsReal }
+  ).Count
+  $hasInspectionError = (
+    $environment.InspectionErrors.Count -gt 0 -or
+    $hosts.State -eq 'Error' -or
+    $firewall.Health -eq 'Error' -or
+    $mintPath.Health -eq 'Error' -or
+    $inventory.Errors.Count -gt 0
+  )
+  $hasUnresolvedIdentity = (
+    $deviceTicketCount -gt 0 -or
+    $unknownActiveIdentityCount -gt 0
+  )
+  $hasError = (
+    $hasInspectionError -or
+    (-not $hasReal -and $hasUnresolvedIdentity)
+  )
+  $verdict = Get-GdidVerdict `
+    -HasError $hasError `
+    -EnvironmentSupported $environmentSupported `
+    -HasRealGdid $hasReal `
+    -BlockHealthy $blockHealthy
+
+  $environmentInspectionErrors = @(
+    $environment.InspectionErrors |
+      ForEach-Object {
+        Format-StatusErrorText `
+          -Text $_ `
+          -Target $environment.Target `
+          -Show:$ShowIdentifier
+      }
+  )
+  $environmentWarnings = @(
+    $environment.Warnings |
+      ForEach-Object {
+        Format-StatusErrorText `
+          -Text $_ `
+          -Target $environment.Target `
+          -Show:$ShowIdentifier
+      }
+  )
+  $firewallErrors = @(
+    $firewall.Errors |
+      ForEach-Object {
+        Format-StatusErrorText `
+          -Text $_ `
+          -Target $environment.Target `
+          -Show:$ShowIdentifier
+      }
+  )
+  $inventoryErrors = @(
+    $inventory.Errors |
+      ForEach-Object {
+        Format-StatusErrorText `
+          -Text $_ `
+          -Target $environment.Target `
+          -Show:$ShowIdentifier
+      }
+  )
+  $mintPathErrors = @(
+    $mintPath.Errors |
+      ForEach-Object {
+        Format-StatusErrorText `
+          -Text $_ `
+          -Target $environment.Target `
+          -Show:$ShowIdentifier
+      }
+  )
+  $mintPathReport = [pscustomobject][ordered]@{
+    Health = $mintPath.Health
+    Online = $mintPath.Online
+    IPv4Blocked = $mintPath.IPv4Blocked
+    IPv6Blocked = $mintPath.IPv6Blocked
+    IPv4AnswerCount = $mintPath.IPv4AnswerCount
+    IPv6AnswerCount = $mintPath.IPv6AnswerCount
+    UnexpectedAddressCount = $mintPath.UnexpectedAddressCount
+    TcpProbe = $mintPath.TcpProbe
+    TcpBlocked = $mintPath.TcpBlocked
+    OfflineAccepted = $mintPath.OfflineAccepted
+    Errors = $mintPathErrors
+  }
+
+  $targetReport = [pscustomobject]@{
+    Resolved = $null -ne $environment.Target
+    Account = '(none)'
+    Sid = '(none)'
+    Profile = '(none)'
+    HiveLoaded = $false
+    Resolution = '(none)'
+  }
+  if ($null -ne $environment.Target) {
+    $targetReport = [pscustomobject]@{
+      Resolved = $true
+      Account = Format-PrivateValue `
+        -Value $environment.Target.AccountName `
+        -Show:$ShowIdentifier `
+        -Prefix '<account>'
+      Sid = Format-PrivateValue `
+        -Value $environment.Target.Sid `
+        -Show:$ShowIdentifier `
+        -Prefix '<sid>'
+      Profile = Format-PrivateValue `
+        -Value $environment.Target.ProfilePath `
+        -Show:$ShowIdentifier `
+        -Prefix '<profile>'
+      HiveLoaded = [bool]$environment.Target.HiveLoaded
+      Resolution = $environment.Target.Resolution
+    }
+  }
+
+  $activeEntries = @(
+    $inventory.Entries |
+      Where-Object { $_.Category -eq 'Active' } |
+      ForEach-Object {
+        $sourceText = $_.Source
+        if (-not $ShowIdentifier -and $_.SourceKind -eq 'TokenDeviceId') {
+          $sourceText = 'Token:<client>#{0}' -f (
+            Get-Sha256Hex $_.Source
+          ).Substring(0, 8)
+        }
+        [pscustomobject]@{
+          Source = $sourceText
+          Kind = $_.SourceKind
+          IsRealShaped = $_.IsReal
+          Identifier = Format-GdidIdentifier `
+            -Value $_.RawIdentifier `
+            -Show:$ShowIdentifier
+          Gdid = $(if ($_.IsReal) {
+            Format-PrivateValue `
+              -Value (ConvertTo-Gdid $_.RawIdentifier) `
+              -Show:$ShowIdentifier `
+              -Prefix '<gdid>'
+          } else {
+            '(not-real-shaped)'
+          })
+        }
+      }
+  )
+  $residualEntries = @(
+    $inventory.Entries |
+      Where-Object { $_.Category -eq 'ResidualCache' } |
+      ForEach-Object {
+        [pscustomobject]@{
+          Source = $_.Source
+          Kind = $_.SourceKind
+          Identifier = Format-GdidIdentifier `
+            -Value $_.RawIdentifier `
+            -Show:$ShowIdentifier
+        }
+      }
+  )
+  $gdidSummary = @(
+    foreach ($puid in @($inventory.AllRealPuids | Sort-Object -Unique)) {
+      $matchingEntries = @(
+        $inventory.Entries |
+          Where-Object { $_.RawIdentifier -ieq $puid }
+      )
+      $locations = @(
+        $matchingEntries |
+          ForEach-Object { Get-GdidLocationLabel -Entry $_ } |
+          Sort-Object -Unique
+      )
+      [pscustomobject][ordered]@{
+        Gdid = Format-PrivateValue `
+          -Value (ConvertTo-Gdid $puid) `
+          -Show:$ShowIdentifier `
+          -Prefix '<gdid>'
+        RegistryId = Format-GdidIdentifier `
+          -Value $puid `
+          -Show:$ShowIdentifier
+        Active = @(
+          $matchingEntries | Where-Object { $_.Category -eq 'Active' }
+        ).Count -gt 0
+        Cached = @(
+          $matchingEntries | Where-Object { $_.Category -eq 'ResidualCache' }
+        ).Count -gt 0
+        TokenCopyCount = @(
+          $matchingEntries | Where-Object { $_.SourceKind -eq 'TokenDeviceId' }
+        ).Count
+        Locations = $locations
+      }
+    }
+  )
+
+  return [pscustomobject][ordered]@{
+    Timestamp = (Get-Date).ToString('o')
+    Environment = [pscustomobject][ordered]@{
+      Supported = $environmentSupported
+      IsAdministrator = $environment.IsAdministrator
+      IsWindows11 = $environment.IsWindows11
+      IsSupportedBuild = $environment.IsSupportedBuild
+      Is64BitProcess = $environment.Is64BitProcess
+      Unmanaged = $environment.Unmanaged
+      ProductName = $environment.ProductName
+      Build = $environment.Build
+      DisplayVersion = $environment.DisplayVersion
+      DomainJoined = $environment.DomainJoined
+      EntraJoined = $environment.EntraJoined
+      MdmEnrolled = $environment.MdmEnrolled
+      HumanProfileCount = $environment.HumanProfileCount
+      DormantProfileCount = $environment.DormantProfileCount
+      ProfileArtifactCount = $environment.ProfileArtifactCount
+      Warnings = $environmentWarnings
+      UnsupportedReasons = @($environment.UnsupportedReasons)
+      TargetFailureReasons = @($environment.TargetFailureReasons)
+      InspectionErrors = $environmentInspectionErrors
+    }
+    TargetUser = $targetReport
+    Gdids = $gdidSummary
+    Hosts = [pscustomobject][ordered]@{
+      State = $hosts.State
+      Canonical = $hosts.Canonical
+      Encoding = $hosts.Encoding
+      IPv4Count = $hosts.IPv4Count
+      IPv6Count = $hosts.IPv6Count
+      MissingIPv4 = @($hosts.MissingIPv4)
+      MissingIPv6 = @($hosts.MissingIPv6)
+      Error = Format-StatusErrorText `
+        -Text $hosts.Error `
+        -Target $environment.Target `
+        -Show:$ShowIdentifier
+    }
+    Firewall = [pscustomobject][ordered]@{
+      Available = $firewall.Available
+      Health = $firewall.Health
+      KeywordCount = $firewall.KeywordCount
+      MissingKeywords = @($firewall.MissingKeywords)
+      InvalidKeywords = @($firewall.InvalidKeywords)
+      RuleCount = $firewall.RuleCount
+      RuleValid = $firewall.RuleValid
+      FqdnRuleEnforcement = $firewall.FqdnRuleEnforcement
+      MintServiceRuleCount = $firewall.MintServiceRuleCount
+      MintServiceRuleValid = $firewall.MintServiceRuleValid
+      MintServiceRuleEnforcement = $firewall.MintServiceRuleEnforcement
+      StagingRuleCount = $firewall.StagingRuleCount
+      HydratedKeywordCount = $firewall.HydratedKeywordCount
+      MintKeywordHydrated = $firewall.MintKeywordHydrated
+      InfrastructureHealthy = $firewall.InfrastructureHealthy
+      LegacyRuleCount = $firewall.LegacyRuleCount
+      Errors = $firewallErrors
+    }
+    MintPath = $mintPathReport
+    ActiveStoreInventory = [pscustomobject][ordered]@{
+      Count = $activeEntries.Count
+      RealShapedCount = @($activeEntries | Where-Object { $_.IsRealShaped }).Count
+      UnknownIdentityCount = $unknownActiveIdentityCount
+      DeviceTicketCount = $deviceTicketCount
+      Entries = $activeEntries
+      Errors = $inventoryErrors
+    }
+    ResidualCaches = [pscustomobject][ordered]@{
+      RealPuidCount = $residualEntries.Count
+      Entries = $residualEntries
+      Files = @($inventory.CacheArtifacts)
+    }
+    Verdict = $verdict
+  }
 }
 
-if ($Wipe) { Invoke-Wipe }
-if ($Decoy) { Invoke-Decoy }
+function Write-DegdidStatusHuman {
+  param([object]$Report)
 
-Write-Output 'Done. Re-run: .\degdid.ps1 -Status'
-exit 0
+  Write-Output ''
+  Write-Output ('degdid status — {0}' -f $Report.Timestamp)
+  Write-Output ''
+  Write-Output 'This PC'
+  Write-Output (
+    '  Windows 11 {0}, build {1}' -f
+    $Report.Environment.DisplayVersion,
+    $Report.Environment.Build
+  )
+  if ($Report.TargetUser.Resolved) {
+    Write-Output ('  User:    {0}' -f $Report.TargetUser.Account)
+    Write-Output ('  SID:     {0}' -f $Report.TargetUser.Sid)
+    Write-Output ('  Profile: {0}' -f $Report.TargetUser.Profile)
+  } else {
+    Write-Output '  User: could not determine the target profile'
+  }
+  Write-Output (
+    '  Supported by this tool: {0}' -f
+    $(if ($Report.Environment.Supported) { 'YES' } else { 'NO' })
+  )
+  if (-not $Report.Environment.IsAdministrator) {
+    Write-Output '  Note: Status works here, but changes require PowerShell as Administrator.'
+  }
+  if ($Report.Environment.DormantProfileCount -gt 0) {
+    Write-Output (
+      '  Dormant profiles ignored: {0} (not loaded and not active targets)' -f
+      $Report.Environment.DormantProfileCount
+    )
+  }
+
+  $blockActive = (
+    $Report.Hosts.State -eq 'Valid' -and
+    $Report.Hosts.Canonical -and
+    $Report.Firewall.Health -eq 'Valid' -and
+    $Report.MintPath.Health -eq 'Valid'
+  )
+  $blockAbsent = (
+    $Report.Hosts.State -eq 'Absent' -and
+    $Report.Firewall.Health -eq 'Absent'
+  )
+  Write-Output ''
+  Write-Output 'Registration protection'
+  if ($blockActive) {
+    Write-Output '  ACTIVE — Windows DeviceAdd is blocked.'
+    Write-Output '  login.live.com: blocked on IPv4 and IPv6; TCP connection failed.'
+  } elseif ($blockAbsent) {
+    Write-Output '  NOT CONFIGURED — Windows can contact Microsoft and mint another GDID.'
+    Write-Output '  Hosts block: absent'
+    Write-Output '  Firewall block: absent'
+  } else {
+    Write-Output '  INCOMPLETE — some protection exists, but it is not safe to rely on.'
+    Write-Output ('  Hosts block: {0}' -f $Report.Hosts.State)
+    Write-Output ('  Firewall block: {0}' -f $Report.Firewall.Health)
+    Write-Output ('  DeviceAdd path: {0}' -f $Report.MintPath.Health)
+  }
+
+  Write-Output ''
+  Write-Output 'Global Device Identifiers'
+  if ($Report.Gdids.Count -eq 0) {
+    if (
+      $Report.ActiveStoreInventory.DeviceTicketCount -gt 0 -or
+      $Report.ActiveStoreInventory.UnknownIdentityCount -gt 0
+    ) {
+      Write-Output '  No readable GDID was found, but opaque identity state remains.'
+    } else {
+      Write-Output '  No real-shaped GDID was found in the known active or cache stores.'
+    }
+  } else {
+    Write-Output (
+      '  FOUND {0} distinct real GDID value(s):' -f $Report.Gdids.Count
+    )
+    foreach ($gdid in $Report.Gdids) {
+      $state = if ($gdid.Active -and $gdid.Cached) {
+        'ACTIVE + CACHED'
+      } elseif ($gdid.Active) {
+        'ACTIVE'
+      } else {
+        'CACHED ONLY'
+      }
+      Write-Output ''
+      Write-Output ('  {0}  [{1}]' -f $gdid.Gdid, $state)
+      Write-Output ('    Registry form: {0}' -f $gdid.RegistryId)
+      Write-Output ('    Found in: {0}' -f ($gdid.Locations -join ', '))
+      if ($gdid.TokenCopyCount -gt 0) {
+        Write-Output (
+          '    Device-token copies carrying this ID: {0}' -f
+          $gdid.TokenCopyCount
+        )
+      }
+    }
+  }
+  if ($Report.ActiveStoreInventory.DeviceTicketCount -gt 0) {
+    Write-Output ''
+    Write-Output (
+      '  Opaque device tickets still present: {0}' -f
+      $Report.ActiveStoreInventory.DeviceTicketCount
+    )
+  }
+
+  Write-Output ''
+  switch ($Report.Verdict) {
+    'ProtectedNoRealGdid' {
+      Write-Output 'VERDICT: PROTECTED — no real GDID found and DeviceAdd is blocked.'
+      Write-Output 'No action is required. Re-run Status after major Windows or firewall changes.'
+    }
+    'RealGdidPresent' {
+      Write-Output 'VERDICT: REAL GDID PRESENT — Windows has identifiers it can use or send.'
+      Write-Output 'Recommended action: .\degdid.ps1 -Protect'
+    }
+    'BlockDegraded' {
+      Write-Output 'VERDICT: NO GDID FOUND, BUT REGISTRATION IS NOT SAFELY BLOCKED.'
+      Write-Output 'Recommended action: .\degdid.ps1 -Protect'
+    }
+    'UnsupportedEnvironment' {
+      Write-Output 'VERDICT: THIS MACHINE IS OUTSIDE THE SAFE MUTATION RULES.'
+      foreach ($reason in $Report.Environment.UnsupportedReasons) {
+        Write-Output ('  - {0}' -f $reason)
+      }
+      foreach ($reason in $Report.Environment.TargetFailureReasons) {
+        Write-Output ('  - {0}' -f $reason)
+      }
+    }
+    default {
+      Write-Output 'VERDICT: STATUS IS INCOMPLETE — do not assume the machine is clean.'
+      foreach ($errorText in $Report.Environment.InspectionErrors) {
+        Write-Output ('  - {0}' -f $errorText)
+      }
+      if ($Report.Hosts.Error) {
+        Write-Output ('  - Hosts: {0}' -f $Report.Hosts.Error)
+      }
+      foreach ($errorText in $Report.Firewall.Errors) {
+        Write-Output ('  - Firewall: {0}' -f $errorText)
+      }
+      foreach ($errorText in $Report.MintPath.Errors) {
+        Write-Output ('  - DeviceAdd check: {0}' -f $errorText)
+      }
+      foreach ($errorText in $Report.ActiveStoreInventory.Errors) {
+        Write-Output ('  - Identity inventory: {0}' -f $errorText)
+      }
+    }
+  }
+  Write-Output ''
+  Write-Output 'For full technical diagnostics: .\degdid.ps1 -Status -Json'
+  Write-Output 'For share-safe output:         .\degdid.ps1 -Status -Redact'
+}
+
+function Invoke-DnsFlush {
+  $ipconfig = Join-Path $env:SystemRoot 'System32\ipconfig.exe'
+  & $ipconfig /flushdns | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw 'ipconfig /flushdns exited with code {0}.' -f $LASTEXITCODE
+  }
+}
+
+function Invoke-BlockConfiguration {
+  param([switch]$DryRun)
+
+  if (-not $DryRun) {
+    try {
+      # Establish the mint-service deny before the hosts rewrite so cached
+      # addresses cannot create an exposure window during block refresh.
+      New-StagingMintServiceRule
+      if (-not (Test-StagingMintServiceRuleEnforced)) {
+        throw 'Staging wlidsvc rule is not fully enforced in ActiveStore.'
+      }
+    } catch {
+      return [pscustomobject]@{
+        Success = $false
+        ExitCode = 3
+        Message = 'Could not establish the fail-closed staging service rule: {0}' -f $_.Exception.Message
+        Hosts = $null
+        Firewall = $null
+        Gate = $null
+      }
+    }
+  }
+
+  try {
+    $hostsResult = Invoke-HostsDocumentChange -Mode Block -DryRun:$DryRun
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 4
+      Message = $(if ($DryRun) {
+        $_.Exception.Message
+      } else {
+        '{0} The fail-closed staging wlidsvc rule remains active.' -f $_.Exception.Message
+      })
+      Hosts = $null
+      Firewall = $null
+      Gate = $null
+    }
+  }
+
+  $firewallResult = Set-FirewallBlock `
+    -DryRun:$DryRun `
+    -UseExistingStaging:(-not $DryRun)
+  if (-not $firewallResult.Success) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 3
+      Message = $firewallResult.Message
+      Hosts = $hostsResult
+      Firewall = $firewallResult
+      Gate = $null
+    }
+  }
+
+  if ($DryRun) {
+    return [pscustomobject]@{
+      Success = $true
+      ExitCode = 0
+      Message = 'DryRun planned hosts and firewall refresh; current state was not changed.'
+      Hosts = $hostsResult
+      Firewall = $firewallResult
+      Gate = Get-ProtectionGate
+    }
+  }
+
+  try {
+    Invoke-DnsFlush
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 3
+      Message = $_.Exception.Message
+      Hosts = $hostsResult
+      Firewall = $firewallResult
+      Gate = $null
+    }
+  }
+
+  $gate = Get-ProtectionGate
+  return [pscustomobject]@{
+    Success = $gate.Healthy
+    ExitCode = $(if ($gate.Healthy) { 0 } else { 3 })
+    Message = $(if ($gate.Healthy) {
+      'Hosts, dynamic-keyword firewall, and mint path independently verified.'
+    } else {
+      'Registration block verification failed.'
+    })
+    Hosts = $hostsResult
+    Firewall = $firewallResult
+    Gate = $gate
+  }
+}
+
+function Invoke-UnblockConfiguration {
+  param([switch]$DryRun)
+
+  # Validate that the managed region can be removed before touching either
+  # layer. The real operation removes firewall state first and hosts last so
+  # a partial failure leaves the independent hosts block in place.
+  try {
+    $hostsPreflight = Invoke-HostsDocumentChange -Mode Unblock -DryRun
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 4
+      Message = $_.Exception.Message
+      Hosts = $null
+      Firewall = $null
+    }
+  }
+
+  $firewallResult = Remove-FirewallBlock -DryRun:$DryRun
+  if (-not $firewallResult.Success) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 3
+      Message = 'Firewall cleanup failed; the hosts block was left unchanged.'
+      Hosts = $hostsPreflight
+      Firewall = $firewallResult
+    }
+  }
+
+  if ($DryRun) {
+    return [pscustomobject]@{
+      Success = $true
+      ExitCode = 0
+      Message = 'Would remove managed firewall state first, then the valid hosts region.'
+      Hosts = $hostsPreflight
+      Firewall = $firewallResult
+    }
+  }
+
+  try {
+    $hostsResult = Invoke-HostsDocumentChange -Mode Unblock
+    Invoke-DnsFlush
+    $hostsAfter = Read-HostsDocument
+    if ($hostsAfter.State.State -ne 'Absent') {
+      throw 'Managed hosts region is still present after Unblock.'
+    }
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 4
+      Message = 'Firewall state was removed, but hosts cleanup did not complete: {0}' -f $_.Exception.Message
+      Hosts = $hostsPreflight
+      Firewall = $firewallResult
+    }
+  }
+
+  return [pscustomobject]@{
+    Success = $true
+    ExitCode = 0
+    Message = 'Managed firewall state and valid hosts region removed.'
+    Hosts = $hostsResult
+    Firewall = $firewallResult
+  }
+}
+
+function Write-MutationResult {
+  param([object]$Result)
+
+  Write-Output $Result.Message
+  Write-Output ('CapturedRealPuids={0}' -f $Result.CapturedCount)
+  if ($Result.Decoy) {
+    Write-Output (
+      'GeneratedDecoy={0}' -f
+      (Format-GdidIdentifier -Value $Result.Decoy -Show)
+    )
+  }
+  $failed = @($Result.Results | Where-Object { -not $_.Success })
+  Write-Output (
+    'Operations Total={0} Failed={1}' -f
+    $Result.Results.Count,
+    $failed.Count
+  )
+  foreach ($failure in $failed) {
+    Write-Output (
+      'OperationFailure {0}: {1}' -f
+      $failure.Name,
+      (Format-StatusErrorText -Text $failure.Error)
+    )
+  }
+  foreach ($errorText in $Result.Errors) {
+    Write-Output (
+      'Error: {0}' -f
+      (Format-StatusErrorText -Text $errorText)
+    )
+  }
+}
+
+function Invoke-DegdidMain {
+  if (-not ($Status -or $Wipe -or $Decoy -or $Block -or $Unblock -or $Protect)) {
+    $script:Status = $true
+  }
+
+  if ($Status) {
+    $displayFullIdentifiers = ($ShowIdentifier -or -not $Redact)
+    $report = Get-DegdidStatus -ShowIdentifier:$displayFullIdentifiers
+    if ($Json) {
+      Write-Output ($report | ConvertTo-Json -Depth 8)
+    } else {
+      Write-DegdidStatusHuman -Report $report
+    }
+    $script:DegdidExitCode = 0
+    return
+  }
+
+  # Recovery must remain available if the machine later becomes managed,
+  # gains another profile, or has no interactive user. Unblock touches only
+  # degdid-owned network state, not identity stores.
+  if ($Unblock) {
+    if (-not $DryRun -and -not (Test-IsAdministrator)) {
+      Write-Output 'Refused: Unblock requires an elevated administrator PowerShell.'
+      $script:DegdidExitCode = 1
+      return
+    }
+    $result = Invoke-UnblockConfiguration -DryRun:$DryRun
+    Write-Output $result.Message
+    if ($DryRun) {
+      Write-Output 'DryRun: no hosts or firewall state was changed.'
+    } elseif ($result.Success) {
+      Write-Output 'Warning: a future DeviceAdd can mint a real GDID.'
+    }
+    $script:DegdidExitCode = $result.ExitCode
+    return
+  }
+
+  $environment = Get-EnvironmentState
+  $preflight = Get-MutationPreflight -Environment $environment
+  if (-not $preflight.Allowed) {
+    Write-Output ('Refused: {0}' -f $preflight.Message)
+    $script:DegdidExitCode = $preflight.ExitCode
+    return
+  }
+
+  if ($Block) {
+    $result = Invoke-BlockConfiguration -DryRun:$DryRun
+    Write-Output $result.Message
+    if ($DryRun -and $null -ne $result.Gate) {
+      Write-Output (
+        'CurrentBlockApplied={0}; planned state was not substituted for current state.' -f
+        $result.Gate.Healthy
+      )
+    }
+    $script:DegdidExitCode = $result.ExitCode
+    return
+  }
+
+  if ($Protect) {
+    $blockResult = Invoke-BlockConfiguration -DryRun:$DryRun
+    Write-Output ('Protect block phase: {0}' -f $blockResult.Message)
+    if (-not $blockResult.Success) {
+      Write-Output 'Protect aborted before identity mutation.'
+      $script:DegdidExitCode = $blockResult.ExitCode
+      return
+    }
+    if ($DryRun) {
+      $modeName = $(if ($UseDecoy) { 'Decoy' } else { 'Wipe' })
+      $mutationPlan = Invoke-IdentityMutation `
+        -Mode $modeName `
+        -Target $environment.Target `
+        -DryRun
+      Write-Output (
+        'DryRun: would require post-apply gate verification, then run {0}; nothing changed.' -f
+        $modeName
+      )
+      Write-MutationResult -Result $mutationPlan
+      if ($null -ne $blockResult.Gate) {
+        Write-Output (
+          'CurrentBlockApplied={0}; this is current state, not the planned result.' -f
+          $blockResult.Gate.Healthy
+        )
+      }
+      $script:DegdidExitCode = $mutationPlan.ExitCode
+      return
+    }
+
+    $mode = $(if ($UseDecoy) { 'Decoy' } else { 'Wipe' })
+    $mutation = Invoke-IdentityMutation `
+      -Mode $mode `
+      -Target $environment.Target
+    Write-MutationResult -Result $mutation
+    $script:DegdidExitCode = $mutation.ExitCode
+    return
+  }
+
+  $gate = Get-ProtectionGate
+  if (-not $gate.Healthy) {
+    Write-Output (
+      'Refused: existing hosts/firewall/mint-path gate is not verified. Use -Protect.'
+    )
+    if ($DryRun) {
+      Write-Output 'DryRun: no identity mutation was attempted.'
+    }
+    $script:DegdidExitCode = 3
+    return
+  }
+
+  $mode = $(if ($Decoy) { 'Decoy' } else { 'Wipe' })
+  $mutation = Invoke-IdentityMutation `
+    -Mode $mode `
+    -Target $environment.Target `
+    -DryRun:$DryRun
+  Write-MutationResult -Result $mutation
+  $script:DegdidExitCode = $mutation.ExitCode
+}
+
+if (-not $InternalNoExit) {
+  try {
+    Invoke-DegdidMain
+  } catch {
+    $safeError = Format-StatusErrorText `
+      -Text $_.Exception.Message `
+      -Show:(-not $Redact)
+    if ($Json) {
+      Write-Output (
+        [pscustomobject][ordered]@{
+          Timestamp = (Get-Date).ToString('o')
+          Verdict = 'Error'
+          Error = $safeError
+        } | ConvertTo-Json
+      )
+    } else {
+      Write-Output ('Unexpected error: {0}' -f $safeError)
+    }
+    $script:DegdidExitCode = 1
+  }
+  exit $script:DegdidExitCode
+}

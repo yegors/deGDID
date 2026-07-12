@@ -4,160 +4,241 @@ Last updated: 2026-07-11
 
 ## Purpose
 
-**Research** Microsoft's Global Device Identifier (GDID) and related Windows identity/telemetry surfaces in high detail - then **design and validate countermeasures** against this class of unwarranted, opaque device tracking.
+The project has two related tracks:
 
-This is not a one-off blog summary. Goal: map the full mint -> store -> emit -> correlate pipeline, measure what actually leaks, and ship practical mitigations users/researchers can verify.
+1. **Research:** map the GDID mint, local persistence, registration, reporting, and correlation pipeline with explicit evidence tags.
+2. **Hardening:** provide a narrow, auditable completion gate that removes real server-issued GDID state from known local stores and continuously blocks DeviceAdd on a supported Windows 11 target.
 
-### In scope
+The research track is intentionally broader than the shipped tool. `degdid.ps1` does not claim to suppress general Windows telemetry or the unidentified channel behind the court-reported GDID-to-URL/time/IP association.
 
-- GDID / Device PUID lifecycle (MSA + anonymous CDP paths)
-- Connected Devices Platform (CDP), Device Directory Service (DDS), Delivery Optimization reporting
-- Local persistence (IdentityCRL, tokens, Feedback Hub, Iris, etc.)
-- Network endpoints and telemetry that carry or key on GDID
-- Correlation risks (IP history, MSA account, hardware-bound keys, reinstall linkage)
-- Countermeasures: detect, disrupt, **prevent-at-install**, **registration blocking**, **local-only offline rotate**, isolate, verify - with honest limits
-- Lab validation: breakage (Store/MSA/CDP), **Windows Update** behavior under blocks/rotate
+## Scope
 
-### Out of scope (for now)
+### Research scope
 
-- Evading lawful process in criminal investigations (we study the mechanism; we don't coach crime)
-- Non-Windows platforms (except brief comparison notes)
-- General "debloat Windows" theater unrelated to device-identity tracking
+- GDID / Device PUID lifecycle for MSA and local-account machines
+- `wlidsvc`, IdentityCRL, CDP, DDS, and Delivery Optimization relationships
+- Local persistence in `LID`, Immersive Property, Token state, machine NegativeCache, and user caches
+- DeviceAdd and graph endpoint inventory
+- Correlation risks involving IP history, MSA, device keys, and hardware material
+- Compatibility evidence for desktop, Windows Update, Defender, Store/MSA, Xbox, Phone Link, and CDP workflows
 
-### Success criteria
+### Tool scope
 
-1. **Documented model** of how GDID is created, stored, synced, and reported - with confidence tags and repro steps.
-2. **Inventory** of local + network surfaces that expose or depend on it.
-3. **Countermeasure matrix**: each control -> what it breaks -> residual risk -> how to test.
-4. **Lab answers** to: prevent-at-install? local-only rotate stick? updates still work? what breaks?
-5. **Tooling:** root `degdid.ps1` (status / protect / wipe / decoy / block).
-6. **Honest threat model**: what we can stop locally vs what Microsoft still holds server-side.
+- Inspect the supported environment and known GDID stores
+- Redact identifiers by default and expose explicit human/JSON status modes
+- Apply a canonical dual-stack hosts region
+- Configure auto-resolving FQDN firewall objects with explicit hydration reporting, plus a `wlidsvc` service-scoped outbound deny
+- Verify the mint path independently before identity mutation
+- Perform canonical expanded Wipe, or experimental Decoy
+- Verify local postconditions after a service-settle interval
+- Remove only degdid-managed network state through a recovery-accessible Unblock path
 
----
+### Explicit non-goals
 
-## Phase 0 - Foundations (done)
+- Erasing Microsoft server-side history
+- Proving that all possible local stores have been discovered
+- Suppressing DiagTrack, SmartScreen, Defender, Delivery Optimization, or every telemetry plane
+- Identifying or blocking the unknown court-record channel
+- Guaranteeing anonymity, unlinkability, or cross-reinstall separation
+- Supporting domain, Entra, MDM, or simultaneous multi-loaded-profile mutation
+- Coaching evasion of lawful process
 
-- [x] Stokes / July 2026 news context
-- [x] Official MS crumbs (`UCDOStatus.GlobalDeviceId`)
-- [x] Community RE baseline (wlidsvc -> CDP/DDS -> DO)
-- [x] Local read of this machine's GDID + IdentityCRL layout
-- [x] Token-dir app/client mapping (partial; 3 GUIDs still unknown)
-- [x] Glossary + threat model
-- [x] Repo layout: `docs/experiments/`, `degdid.ps1`, `tools/`
+## Operational contract
 
----
+### Supported mutation target
 
-## Phase 1 - Deep technical map (done enough to lab)
+`-Block`, `-Wipe`, `-Decoy`, and `-Protect` require:
 
-| Workstream | Status |
-|------------|--------|
-| **Mint** | MSA DeviceAdd path documented; anonymous path lab-pending |
-| **Persist** | IdentityCRL / Token / SYSTEM / `.DEFAULT` / CDP folder mapped |
-| **Register** | DDS endpoints + CDP ETW registration flow documented |
-| **Emit** | DO + activity + court URL implication; exact URL sensor unknown |
-| **Correlate** | IP / MSA / hardware residual risks in threat model |
-| **Policy** | Thin - no post-Stokes MS consumer statement found |
+- Windows 11 25H2 build 26200; other builds remain unadvertised until separately validated
+- no domain join
+- no Entra join, registration, enterprise join, or workplace join
+- no detected MDM enrollment
+- exactly one loaded target human-profile hive; dormant profile artifacts are warnings
+- one active interactive user, or an authenticated session mapped to the sole loaded profile
+- the target user's `HKEY_USERS\<SID>` hive loaded
+- elevated administrator PowerShell
 
-**Deliverables:** `architecture.md`, `surfaces.md`, `threat-model.md`, `glossary.md`, `open-questions.md`
+Unknown join, enrollment, profile, or target state is a refusal, not a best guess. Status may inspect unsupported systems. Unblock bypasses the target/profile contract so recovery remains possible if the machine later becomes managed, gains another profile, or loses its interactive target.
 
----
+### Completion condition
 
-## Phase 2 - VM lab (DONE - core matrix)
+The canonical completion condition is:
 
-Full runbook: **[`lab-playbook.md`](./lab-playbook.md)**. Notes: **`docs/experiments/`**.
+1. supported and readable environment;
+2. no real-shaped PUID in the known active stores or residual registry inventory after Wipe and settle; and
+3. a healthy continuous block gate.
 
-### Countermeasure hypotheses (lab must prove)
+The corresponding Status verdict is `ProtectedNoRealGdid`. The gate is GDID-specific. It does not imply that Microsoft has forgotten old records or that unrelated telemetry stopped.
 
-| Priority | Question | Result |
-|----------|----------|--------|
-| â˜… | **Prevent mint at install** | **PASS** EXP-A1 / A4 |
-| â˜… | **Local-only offline rotate** | **PASS** EXP-C / C3 (expanded wipe) |
-| â˜… | **Permanent registration blocks** | **PASS** with continuous hosts |
-| â˜… | **Windows Update** under blocks | **PASS** EXP-D |
-| | Breakage catalog | **PASS** EXP-E (expected MSA/CDP pain) |
-| | Online server re-mint (control) | **PASS** EXP-B; nuanced EXP-F |
+The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from shape alone. A locally generated Decoy therefore remains experimental and is not the canonical completion state.
 
-### Agent execution sequence
+## Success criteria
 
-1. **L0-L1** Prep + tools - **done**  
-2. **L2** EXP-A - **done**  
-3. **L3** EXP-B - **done**  
-4. **L4** EXP-C / C2 / C3 - **done**  
-5. **L5** EXP-D / E / F - **done**  
-6. **L6** Synthesize into countermeasures / open-questions - **done**
+### Research deliverables
 
-Deferred (low ROI): feature-update under blocks; firewall-only (no hosts) minimum.
+- [x] Source-tagged architecture for mint, persist, register, and report
+- [x] Local and network surface inventory
+- [x] Threat model separating local controls from server-side history
+- [x] Historical experiment notes with redacted identifiers
+- [x] Selected Token client mappings documented
+- [ ] Exact current anonymous/local-account wire response and complete token claim map
+- [ ] Exact component/channel behind the court-reported URL association
 
----
+### Tool implementation
 
-## Phase 3 - Countermeasure design (draft started)
+- [x] Explicit supported-target preflight and refusal reasons
+- [x] Human-readable full Status, explicit `-Redact`, and detailed `-Json`
+- [x] Exact verdict oracle: `Error`, `UnsupportedEnvironment`, `RealGdidPresent`, `BlockDegraded`, `ProtectedNoRealGdid`
+- [x] Canonical IPv4/IPv6 hosts region with safe parsing and atomic replacement
+- [x] Auto-resolving FQDN dynamic-keyword firewall rule
+- [x] Separate outbound `wlidsvc` service rule
+- [x] Mint-path A/AAAA and TCP verification
+- [x] Expanded Wipe with pre/post inventory and service-state accounting
+- [x] Experimental Decoy mode
+- [x] Fail-closed Protect sequencing
+- [x] Recovery-safe Unblock for degdid-owned state
+- [x] Pure helper tests for hosts handling, redaction, verdicts, postconditions, and preflight precedence
 
-Draft matrix: **[`countermeasures.md`](./countermeasures.md)**.
+### Release validation
 
-| Layer | Idea | Intent |
-|-------|------|--------|
-| **Detect** | Read LID / Token / services | Know your fingerprint |
-| **Prevent** | Offline OOBE; pre-block DeviceAdd | Never get a server GDID |
-| **Starve** | Disable CDP / Activity History | Reduce graph/activity emit |
-| **Block** | Hosts/firewall for login.live DeviceAdd + DDS + activity | Stop mint & re-register |
-| **Local-only rotate** | Offline rewrite/wipe PUID + tickets; **no** DeviceAdd | Break local continuity without giving MS a new real id |
-| **Server rotate** | Clear state online -> new server PUID | Control experiment only |
-| **Isolate** | Dedicated VMs; no personal MSA | Contain blast radius |
-| **Verify** | Inspect + traffic + WU + breakage table | Prove it |
+- [ ] Run the exact current rewrite end to end on a supported clean Windows 11 guest
+- [ ] Run the exact current rewrite on a guest contaminated in machine and target-user stores
+- [ ] Exercise every Status verdict against controlled state
+- [ ] Verify dynamic-keyword FQDN and `wlidsvc` rules on the guest firewall
+- [ ] Verify fail-closed behavior at each block-gate transition
+- [ ] Verify Unblock after profile/topology changes and malformed-marker refusal
+- [ ] Install a known pending cumulative update under the gate
+- [ ] Complete the Store/MSA/Xbox/Phone Link/Edge-sync UI matrix
 
-Preferred contaminated path to validate: **local-only rotate + permanent registration blocks (P4)**.
+Implementation completion and end-to-end lab validation are separate states. The first is complete; the second is not.
 
-Each validated control must document: privileges, side effects, residual risk, rollback.
+`EXP-G` now records a successful exact-rewrite Protect run, two reboot checks, and
+service/task triggers on the 25H2 guest, plus three naturally encountered defects
+that failed closed and were fixed. The real target-user and residual contamination
+shape was exercised. The 24-hour window, clean never-mint clone, and remaining
+transition/recovery matrix are still open; actual MSA UI sign-in is optional
+compatibility work.
 
----
+## Phase 0 - Foundations
 
-## Phase 4 - Tooling
+Status: complete enough for continued validation.
 
-- `degdid.ps1` - status / protect (block+wipe|decoy) / wipe / decoy / block / unblock  
-- `tools/hunt-lid-source.ps1` - research-only rehydrate hunter  
+- [x] July 2026 Stokes reporting and court context
+- [x] Official `UCDOStatus.GlobalDeviceId` documentation
+- [x] Community reverse-engineering baseline from `wlidsvc` through CDP/DDS
+- [x] Local IdentityCRL and machine-hive observations
+- [x] Selected Token client GUIDs resolved; no complete client catalog claimed
+- [x] Glossary, threat model, architecture, surfaces, and open-question backlog
+- [x] Redaction rule: never commit real PUIDs or tickets
 
-No opaque third-party "changer" as dependency; steps are auditable PowerShell.
+## Phase 1 - Technical map
 
----
+Status: useful and source-tagged, with named open gaps.
 
-## Phase 5 - Hardening & disclosure
+| Workstream | Current position |
+|------------|------------------|
+| **Mint** | MSA DeviceAdd is documented. EXP-B observed a local-account first mint into SYSTEM and `.DEFAULT`; exact anonymous/local-account SOAP and ETW capture remains open. |
+| **Persist** | Target-user `LID`, Immersive Property, Token fields, SYSTEM, `.DEFAULT`, NegativeCache, TokenBroker, and CDP caches are in the working model. The inventory is known, not asserted exhaustive. |
+| **Register** | DDS endpoints and CDP registration behavior are documented. |
+| **Report** | Delivery Optimization's `GlobalDeviceId` schema is documented. Activity scopes are evidenced. The court-reported URL channel remains unknown. |
+| **Correlate** | IP, MSA, hardware-input, and cross-reinstall residual risks are separated from the GDID itself. |
+| **Policy** | No GDID-specific post-Stokes consumer statement, opt-out, or retention schedule was found as of 2026-07-11. |
 
-- Publish validated procedures + breakage honesty  
-- Limits: historical MS records; other telemetry planes; MSA join risks  
-- Optional public summary  
+Deliverables: `architecture.md`, `surfaces.md`, `threat-model.md`, `glossary.md`, `gdid-research.md`, and `open-questions.md`.
 
----
+## Phase 2 - Historical VM evidence
+
+Environment: Hyper-V Windows 11 25H2 build 26200, local account, no MSA. The observations validate parts of the design but predate or do not cover every hardening branch in the current rewrite.
+
+| Hypothesis | Evidence status | Observed window and limitation |
+|------------|-----------------|--------------------------------|
+| H1: offline OOBE has no GDID | **Supported** by EXP-A1 | Point-in-time first-desktop inventory with NIC disconnected. |
+| H2: pre-blocking prevents first mint | **Partial** via EXP-A4 | No PUID after service bounce and about 90 seconds online. This does not establish indefinite protection or validate the current complete firewall gate. |
+| H3: local cleanup can remove readable GDID state | **Supported for tested stores** by EXP-C/C3 | Expanded bundle succeeded; inventory is not claimed exhaustive. |
+| H4: cleanup plus continuous block survives reboot | **Partial** via EXP-C3 | Empty after reboot and about four minutes of forced-service soak. Longer validation is pending. |
+| H5: Windows Update works under the block | **Partial** via EXP-D | COM scan with zero pending updates, Defender signature update, and successful prior blocked-period history. No controlled pending cumulative update was installed during EXP-D. |
+| H6: compatibility impact is cataloged | **Partial/inferred** via EXP-E | Desktop, scan, and Defender were exercised. Store/MSA/Xbox/Phone Link/Edge-sync UI workflows were not. |
+| H7: wipe without blocks triggers server remint | **Not directly validated** | EXP-B was a first mint after unblocking a never-minted image, not wipe-then-remint. |
+| H8: feature update preserves the protected state | **Not run** | Deferred to a disposable snapshot. |
+
+Additional evidence:
+
+- EXP-C2 proved that naive LID-only cleanup can rehydrate the same HKCU PUID while hosts remain blocked.
+- EXP-C3 identified Immersive `Property\<PUID>` and parallel Token state as members of the successful expanded cleanup bundle. No controlled ablation established one unique restore source.
+- EXP-F was nuanced: a decoy was not replaced during about six minutes unblocked, and an unblocked wipe stayed empty for about five to six minutes on the exercised image. This does not prove eventual remint or durable safety.
+
+Full notes remain under `docs/experiments/`.
+
+## Phase 3 - Implemented hardening
+
+Status: implemented in root `degdid.ps1`; exact-revision guest validation is in
+progress, with immediate Protect and two reboots passing in interim `EXP-G`.
+
+| Layer | Implementation | Purpose |
+|-------|----------------|---------|
+| **Inspect** | Status environment, target, hosts, firewall, mint path, active stores, residual caches | Produce one explicit verdict without exposing identifiers by default |
+| **Prevent** | Offline OOBE, then `-Block` before first network access | Avoid first DeviceAdd after a local profile exists |
+| **Block** | Dual-stack hosts + FQDN dynamic-keyword configuration/hydration report + `wlidsvc` outbound service rule | Keep the DeviceAdd path unavailable without pretending an unhydrated FQDN rule is enforced |
+| **Wipe** | Clear known active and matching residual state, caches, and tickets | Canonical local removal path |
+| **Protect** | Apply/verify Block, then Wipe by default | Preserve ordering and fail closed |
+| **Decoy** | Generate and install one local `0018`-shaped value after cleanup | Experimental continuity research only |
+| **Unblock** | Remove only valid degdid-managed network state | Recovery without target-profile dependency |
+| **Verify** | Recheck gate, settle services, inventory stores, verify service restoration | Reject partial or ambiguous completion |
+
+The preferred contaminated path is `-Protect`, which means continuous block plus canonical Wipe. Decoy is not the preferred user path.
+
+## Phase 4 - Exact-revision validation plan
+
+Run from disposable snapshots and record exact timestamps:
+
+1. **Eligibility matrix:** supported local single-loaded-target guest; then domain, Entra, MDM, multiple-loaded-profile, no-target, and unloaded-hive refusal cases. Dormant profile artifacts must warn without causing refusal.
+2. **Block matrix:** absent, valid, stale paired, malformed, and duplicate hosts regions; missing/invalid keyword objects; missing FQDN or `wlidsvc` rule.
+3. **Status matrix:** force and capture all five exact verdicts with default redaction and `-Json`; inspect full identifiers only in private output.
+4. **Protect from contamination:** seed or naturally mint target-user and machine-hive state, run canonical Protect, reboot twice, and inspect immediately, at 5 minutes, 30 minutes, and 60 minutes online. Report the actual completed window; do not extrapolate beyond it.
+5. **Fail-closed transitions:** make the gate fail before writes, after writes, and during settle on disposable snapshots; verify refusal, exit code, and service state.
+6. **H5 controlled update:** start with a known pending cumulative update, scan, download, install, reboot, inspect, and retain KB/result evidence.
+7. **H6 UI catalog:** exercise Store free-app download, Settings MSA sign-in, Xbox login, Phone Link pairing, OneDrive MSA sign-in if present, Edge sync, activation status, and non-MSA browsing.
+8. **H7 direct test:** from a freshly contaminated snapshot, Wipe while protected, Unblock, invoke a defined DeviceAdd-capable client, and observe at stated intervals. Keep this separate from EXP-B first mint.
+9. **Recovery:** run Unblock after the guest becomes unsupported and confirm only degdid-owned state is removed; separately verify malformed-marker refusal.
+
+Optional lower-priority work:
+
+- feature update on a disposable snapshot;
+- hosts-versus-firewall ablation;
+- Immersive Property/Token cleanup ablation if stronger source attribution is needed;
+- multi-day continuous-block soak with explicit monitoring times.
 
 ## Working principles
 
-1. **Evidence over vibes** - tag `[COURT]` / `[OBSERVED]` / `[STATIC]` / `[ASSESSED]`.  
-2. **No false safety** - local decoy â‰  MS forgot you; VPN â‰  hide from MS.  
-3. **Prefer local-only + starve over server re-mint** for privacy vs Microsoft.  
-4. **Don't break Update by accident** - never blanket-block `*.microsoft.com`.  
-5. **Docs are memory** - lab results in `docs/experiments/`.  
-6. **Safety** - VM snapshots; no personal MSA on treatment VMs; don't commit tickets/GDIDs.
+1. Tag claims as `[COURT]`, `[OBSERVED]`, `[STATIC]`, `[MSDOC]`, or `[ASSESSED]`.
+2. State the observation window; never convert a short soak into "permanent" or "indefinite."
+3. Treat absence from known stores as a bounded inventory result, not proof of universal absence.
+4. Keep Wipe canonical and Decoy experimental.
+5. Never equate a local wipe with deletion of Microsoft-held history.
+6. Never equate DeviceAdd blocking with suppression of all telemetry or the court-reported channel.
+7. Do not blanket-block `*.microsoft.com`; compatibility must remain measurable.
+8. Use VM snapshots, avoid personal MSA credentials, and never commit tickets or full identifiers.
+9. Keep `docs/experiments/` as the evidence record and this plan as the progress ledger.
 
----
+## Near-term actions
 
-## Near-term next actions
+1. Validate the exact current rewrite end to end on a supported VM.
+2. Run the controlled pending cumulative-update test.
+3. Complete the UI compatibility matrix.
+4. Run direct H7 wipe-then-unblock validation.
+5. Publish only claims supported by those recorded windows.
 
-1. Optional: feature-update disposable snap; firewall-only A/B.  
-2. Optional: public summary / Phase 5 disclosure polish.  
-3. Do **not** re-chase EXP-F remint triggers - EXP-B covers eager mint.
-
----
-
-## Doc index
+## Document index
 
 | File | Role |
 |------|------|
-| `docs/plan.md` | This plan |
-| `docs/lab-playbook.md` | VM experiments + agent run order |
-| `docs/countermeasures.md` | Prevent / block / local wipe matrix + lab tags |
-| `docs/architecture.md` | Generation, lifecycle, network I/O |
-| `docs/surfaces.md` | Storage / services / endpoints |
-| `docs/threat-model.md` | Adversaries, scenarios, limits |
-| `docs/glossary.md` | Terms + confidence tags |
-| `docs/open-questions.md` | Living backlog |
-| `docs/gdid-research.md` | News + quick pointer |
-| `docs/experiments/` | Per-run notes |
+| `docs/plan.md` | Scope, implementation state, and validation backlog |
+| `docs/lab-playbook.md` | Exact-revision VM runbook and historical evidence |
+| `docs/countermeasures.md` | Operational controls, gate semantics, and residual risk |
+| `docs/architecture.md` | Generation, lifecycle, and network I/O |
+| `docs/surfaces.md` | Storage, service, and endpoint inventory |
+| `docs/threat-model.md` | Adversaries, scenarios, and limits |
+| `docs/glossary.md` | Terms and confidence tags |
+| `docs/open-questions.md` | Living research backlog |
+| `docs/gdid-research.md` | News context and research summary |
+| `docs/experiments/` | Per-run observations and redacted evidence |

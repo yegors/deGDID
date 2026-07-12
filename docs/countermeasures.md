@@ -1,144 +1,300 @@
-﻿# Countermeasures - Validated Matrix
+﻿# Countermeasures - Implemented Gate and Evidence
 
-Last updated: 2026-07-11  
-Status: **lab-validated** for core P1/P2/P3/P4 paths on Win11 25H2; see `docs/experiments/`. End-user script: root `degdid.ps1`.
+Last updated: 2026-07-11
 
-Focus strategies called out by project direction:
+Status: the hardened control path is implemented in root `degdid.ps1`. Historical Windows 11 25H2 build 26200 experiments support parts of the design, but the exact current rewrite has not yet completed an end-to-end guest validation pass.
 
-1. **Prevent mint at install**
-2. **Starve / block registration servers**
-3. **Local-only offline rotation** (no network re-register)
-4. (Contrast) Server-side re-provision rotate - not preferred for "offline discontinuity"
+## Objective
 
----
+For a supported target, the operational objective is:
+
+> No real server-issued GDID in the known active stores, with the DeviceAdd path blocked continuously.
+
+The canonical implementation uses a stricter local check: after Wipe and settle, no `0018`-shaped PUID may remain in the known active inventory or matching residual registry cache, and the block gate must still be healthy.
+
+This is a **GDID-only completion gate**. It does not claim to:
+
+- erase Microsoft-held history;
+- stop general Windows telemetry;
+- suppress the unknown channel behind the court-reported GDID-to-URL/time/IP association;
+- prevent correlation through MSA, IP history, hardware material, Entra IDs, advertising IDs, or other identity planes; or
+- prove that the known-store inventory is exhaustive.
+
+## Supported mutation boundary
+
+Mutating actions other than Unblock require all of the following:
+
+- Windows 11 25H2 build 26200 as the enabled test target; exact-rewrite closure is pending and other builds remain outside scope;
+- unmanaged: no domain join, Entra join/registration/workplace join, or MDM enrollment;
+- exactly one loaded target human-profile hive; dormant profile artifacts warn but do not refuse;
+- an active interactive user, or an authenticated session that maps to the sole loaded profile;
+- the target user's `HKEY_USERS\<SID>` hive loaded; and
+- elevated administrator PowerShell.
+
+`-Block`, `-Wipe`, `-Decoy`, and `-Protect` refuse unsupported, unknown,
+multiple-loaded-profile, or unresolved-target states. Dormant profile artifacts are
+reported without blocking the active target. `-Status` may inspect unsupported
+systems and returns an explicit verdict. `-Unblock` deliberately bypasses the
+target/profile preflight so recovery remains available after topology or management
+state changes.
+
+No compatibility claim in this document applies to domain, Entra, MDM, or simultaneous multi-loaded-profile mutation because the tool does not perform it.
 
 ## Strategy overview
 
-| ID | Strategy | Talks to MS? | Continuity break | Main risk |
-|----|----------|--------------|------------------|-----------|
-| P1 | Offline OOBE / delay first DeviceAdd | No until online | N/A (never minted yet) | First unblocked online mints for real |
-| P2 | Block DeviceAdd + DDS + activity hosts | Blocked | Prevents *new* server id | Breaks MSA/Store/CDP; WU must stay allowed |
-| P3 | **Local-only** rewrite/delete Device PUID offline | No | Local fingerprint changes | OS may heal; fake id not in MS graph; unblock -> re-mint |
-| P4 | P3 + P2 combined | No DeviceAdd | Best shot at stable decoy | Same breakage as P2 |
-| P5 | Clear state online -> server new GDID | Yes | New *real* GDID (MS has it) | Old GDID history remains; MSA join |
-| P6 | Starve CDP/Activity without hosts file | Partial | Reduces emit | May not stop mint |
+| ID | Strategy | Current role | Main limitation |
+|----|----------|--------------|-----------------|
+| P1 | Offline OOBE, then block before first network access | Preferred prevention path | Current script needs a completed local profile and loaded interactive hive |
+| P2 | Continuous verified DeviceAdd block | Required ongoing control | Identity and CDP workflows are expected to break; controls can drift |
+| P3 | Expanded Wipe under a verified block | Canonical contaminated-system mutation | Known-store model is bounded; Microsoft history remains |
+| P4 | `-Protect` = P2 then P3 | Preferred end-user path | Exact current rewrite still needs end-to-end VM validation |
+| P5 | Local Decoy under a verified block | Experimental research path | Shape alone cannot prove local provenance; not a clean Status completion |
+| P6 | Unblock degdid-owned network state | Recovery path | A future DeviceAdd can mint a real PUID |
 
-**Project preference to validate:** **P1 + P4** (never mint if possible; if contaminated, local decoy + permanent registration block).
+Server-side first mint or remint is a control condition, not a privacy countermeasure.
 
----
+## P1 - Prevent first mint
 
-## P1 - Prevent generation on install
+### Procedure
 
-### Idea
-Complete setup **without** reaching `login.live.com` DeviceAdd. Keep registration blocked before first route to Internet.
+1. Complete OOBE offline with a local account.
+2. Reach the desktop so the sole profile and interactive hive exist.
+3. While still offline, run `.\degdid.ps1 -Block` from elevated PowerShell.
+4. Confirm `ProtectedNoRealGdid` before enabling the NIC.
+5. Keep the block gate continuous and recheck Status after relevant system changes.
 
-### Candidate tactics
-- Airplane / no NIC through OOBE; local account only
-- Pre-apply hosts/firewall blocks **before** enabling network (unattend / first-logon script / parent firewall)
-- Avoid MSA sign-in forever on that image
+An upstream gateway block can cover earlier setup traffic, but it is outside the current script.
 
-### Lab results
-- **`[OBSERVED]` H1:** Offline OOBE/local account -> no `LID` (`EXP-A1`).
-- **`[OBSERVED]` H2 (short soak):** Hosts blocks applied before first online -> general Internet works; `login.live.com` starved; **no `LID`** after wlidsvc/CDP bounce (`EXP-A4`). LiveId logs `0x800704CF`.
-- No local placeholder Device PUID observed without server mint in these runs.
+### Evidence
 
-### Still open
-- Longer soak / reboot under blocks
-- Windows Update under blocks (`EXP-D`)
-- DoH / hardcoded-IP bypass of hosts (need real IP firewall rules via external DNS)
+- `[OBSERVED]` EXP-A1: at first desktop with the NIC disconnected, target-user, `.DEFAULT`, and SYSTEM `LID` stores were empty and no Token keys existed.
+- `[OBSERVED]` EXP-A4: applying the then-current hosts block before first network access kept the inspected stores empty through a service bounce and about 90 seconds online; LiveId reported `0x800704CF`.
+- `[OBSERVED]` EXP-B: removing those blocks from the never-minted image allowed a first machine-hive PUID to appear in about two minutes without MSA sign-in.
 
----
+EXP-A4 is a short hosts-era observation. It does not prove indefinite prevention and does not validate the current full dual-stack/firewall implementation.
 
-## P2 - Block registration servers "for good measure"
+## P2 - Continuous DeviceAdd block
 
-### Block set (v0)
-See `lab-playbook.md` Â§3: `login.live.com`, DDS hosts, `activity.windows.com`, etc.
+### Canonical FQDN set
 
-### Allow
-Windows Update delivery endpoints (do not nuke `*.microsoft.com`).
+The current script manages these exact names:
 
-### Expected breakage
-- Microsoft account sign-in
-- Store auth, Xbox, OneDrive MSA
-- Phone Link / CDP graph
-- Autopilot/ZTD (N/A on consumer lab)
+```text
+login.live.com
+account.live.com
+cs.dds.microsoft.com
+dds.microsoft.com
+aad.cs.dds.microsoft.com
+fd.dds.microsoft.com
+cdpcs.access.microsoft.com
+ztd.dds.microsoft.com
+activity.windows.com
+assets.activity.windows.com
+edge.activity.windows.com
+```
 
-### Expected keepers (to verify)
-- Local apps, files, non-MSA browsing
-- Windows Update (H5)
+There is no wildcard hosts entry. The managed `hosts` region renders one `0.0.0.0` and one `::` line for every exact FQDN.
 
----
+### Firewall controls
 
-## P3 - Local-only rotation (contaminated install)
+The current implementation:
 
-### Idea
-While **offline**, change or wipe local Device PUID copies (`LID`, Token `DeviceId`, SYSTEM/`.DEFAULT`) and wipe device tickets / CDP state - **without** calling DeviceAdd.
+1. creates one deterministic, auto-resolving Windows Firewall dynamic-keyword object for each FQDN;
+2. creates one enabled outbound deny rule over the complete dynamic-keyword set; and
+3. creates a separate enabled outbound deny bound to `svchost.exe` service `wlidsvc`.
 
-### Why
-- Server re-mint (P5) gives Microsoft a **fresh real** GDID immediately - bad if goal is "stop being a registered install."
-- Local decoy aims for: nothing valid to send, or a non-graph id, until/unless blocks fail.
+The dynamic FQDN configuration avoids freezing one transient DNS snapshot, but an
+AutoResolve rule is not enforced until addresses hydrate. In the first exact-rewrite
+guest run, hosts suppression left the keyword address sets empty. Status therefore
+reports hydration separately, and the gate relies on the service-scoped `wlidsvc`
+deny as the independent firewall mint control.
 
-### Will Windows break? (predictions - lab must confirm)
+### Gate verification
 
-| Area | Prediction |
-|------|------------|
-| Boot / local desktop | Likely OK |
-| Windows Update | Likely OK if only identity keys change |
-| MSA / Store / CDP | Likely broken or flaky until re-provision |
-| Activation | Usually separate; watch for device-auth edge cases |
-| After unblock | High chance of **silent DeviceAdd** -> real new GDID (P5) |
+Protection is healthy only when all of these checks pass:
 
-### Lab results (P3/P4)
-- **`[OBSERVED]` EXP-C:** Wipe SYSTEM/`.DEFAULT` `LID` (HKCU never minted) + hosts blocks -> stayed empty across soak/reboot.
-- **`[OBSERVED]` EXP-C2:** After mint into **HKCU**, reboot keeps same GDID; **LID-only** wipe+hosts+reboot -> **same GDID returns in HKCU** (local rehydrate).
-- **`[OBSERVED]` EXP-C3:** Rehydrate source is `HKCU\...\Immersive\production\Property\<LID>` (+ Token DeviceId/Ticket). Expanded wipe + **continuous** hosts blocks -> HKCU/SYSTEM/`.DEFAULT` stay empty across reboot + multi-minute soak. Do not leave a hosts gap while online (gap allowed a *new* machine-hive mint).
-- Server-side history of old GDID still untouched either way.
-- **`[OBSERVED]` EXP-D:** WU COM search + Defender `Update-MpSignature` under blocks; CU history includes blocked-period installs; LID stayed empty.
-- **`[OBSERVED]` EXP-E:** Desktop/WU OK; MSA/LiveId path broken (expected); Store/Xbox/Phone Link auth expected fail under blocks.
-- **`[OBSERVED]` EXP-F:** Decoy in HKCU not instantly replaced after unblock (short soak); wipe+unblock not auto-remint without DeviceAdd client. Eager remint = **EXP-B**.
+- the managed hosts markers are structurally valid and their contents are canonical;
+- every expected IPv4 and IPv6 sinkhole line is present;
+- every dynamic keyword exists exactly once and has the expected AutoResolve FQDN configuration; current address hydration is reported separately;
+- the FQDN deny rule is unique, enabled, outbound, blocking, and references the complete keyword set;
+- the `wlidsvc` service rule is unique, enabled, outbound, blocking, and service-bound;
+- no legacy `degdid-block-*` firewall rules remain;
+- `login.live.com` A answers are only `0.0.0.0`;
+- `login.live.com` AAAA answers are only the unspecified IPv6 sink; and
+- TCP 443 cannot connect, or the machine is explicitly offline with the complete configuration already valid.
 
----
+The gate is a current-state test, not a durability certificate. Keep it active continuously and re-run Status after Windows servicing, security-policy changes, firewall resets, DNS-stack changes, or hosts-file edits.
 
-## P4 - Local-only + permanent blocks (preferred contaminated path)
+### Hosts-file safety
 
-1. Airplane / ensure registration blocks first  
-2. Expanded local wipe or decoy (`degdid.ps1 -Protect` / `-Protect -UseDecoy`)  
-3. Keep P2 blocks continuous (no hosts gap while online)  
-4. Go online; verify LID empty or decoy stable  
-5. Update + breakage: see EXP-D / EXP-E  
+The script:
 
-**Lab status:** validated on Win11 25H2 lab VM (`EXP-A`...`EXP-F`).
+- edits only the paired `# BEGIN degdid-registration-block` / `# END degdid-registration-block` region;
+- preserves unrelated content, detected newline style, and supported encoding/BOM state;
+- refuses malformed, duplicate, or marker-lookalike regions;
+- refuses a hosts file that is a reparse point;
+- serializes writes through a named mutex;
+- creates a timestamped backup and performs atomic replacement.
 
----
+### Compatibility boundary
 
-## P5 - Online server rotate (contrast only)
+Expected broken or degraded workflows include MSA sign-in, Store and Xbox authentication, OneDrive MSA sign-in, Phone Link, CDP graph features, and related device identity flows. Windows Update endpoints are not intentionally blocked.
 
-Clear registration -> allow `login.live.com` -> new server GDID when the stack actually DeviceAdds.  
-**`[OBSERVED]` EXP-B:** first unblock after never-minted blocked state -> mint ~2 min.  
-**`[OBSERVED]` EXP-F:** not an instant timer after decoy/wipe on a tired image.
+Blocking Activity/DDS names may reduce those specific graph calls, but it is not evidence that general telemetry or the court-reported channel is suppressed.
 
----
+## P3 - Canonical expanded Wipe
 
-## Verification checklist (any strategy)
+`-Wipe` is allowed only when an existing protection gate independently verifies. It does not fall back to an online warning.
 
-- [x] `inspect` LID HKCU + SYSTEM + `.DEFAULT`
-- [x] Token `DeviceId` / Immersive Property absence after expanded wipe
-- [x] No DeviceAdd under blocks (LiveId errors / empty LID)
-- [x] WU scan / Defender update under blocks (`EXP-D`)
-- [x] Breakage table (`EXP-E`)
-- [x] Snapshot chain on lab VM (S1...S5)
+The known source model includes:
 
----
+- target-user, `.DEFAULT`, and SYSTEM `ExtendedProperties\LID`;
+- target-user `Immersive\production\Property` values;
+- target-user Token `DeviceId` and `DeviceTicket` fields;
+- machine IdentityCRL NegativeCache keys whose names embed a captured PUID;
+- target-user TokenBroker cache contents; and
+- target-user ConnectedDevicesPlatform cache contents.
 
-## Explicit non-claims
+Before deleting files, the script verifies that each cache is under the resolved target profile and contains no reparse points. It inventories before and after quiescing identity services, captures every real-shaped PUID it can read, performs each operation with explicit accounting, restores the original service state, waits 12 seconds with eligible identity services started for settle, and re-inventories.
 
-- Local decoy â‰  erased MS historical records for old GDID  
-- Blocks â‰  hide all telemetry (DiagTrack and other planes remain)  
-- Not a lawful-process evasion guide  
-- Feature-update and firewall-only-minimum not labbed (deferred)
+Wipe succeeds only if:
 
----
+- inventory reads are complete;
+- every captured old PUID is absent;
+- no real-shaped PUID exists in a known active store;
+- no real-shaped PUID exists in the inspected residual registry cache;
+- all mutation operations succeeded;
+- service state was restored; and
+- the protection gate remained healthy.
 
-## Next
+### Evidence and source attribution
 
-Phase 4 tooling polish / optional public summary. Core lab hypotheses closed.
+- `[OBSERVED]` EXP-C: machine-hive-only PUID state was cleared and remained empty through the tested online/reboot window with hosts blocking.
+- `[OBSERVED]` EXP-C2: after HKCU contamination, clearing only LID values was insufficient; the same target-user PUID returned after reboot while `login.live.com` remained hosts-blocked.
+- `[OBSERVED]` EXP-C3: the successful expanded bundle cleared Immersive Property, Token fields/tickets, LID values, and caches under continuous hosts blocking. The stores remained empty after reboot and about four minutes of forced-service soak.
+
+EXP-C3 showed that Immersive `Property\<PUID>` was present across the failing naive wipe and was removed in the successful expanded bundle. The implementation therefore treats Immersive Property as a **required member of the successful cleanup bundle**. It is not described as the unique restore source unless a future controlled ablation isolates it from Token and cache cleanup.
+
+## P4 - Protect: preferred contaminated path
+
+Run:
+
+```powershell
+.\degdid.ps1 -Protect
+```
+
+Protect:
+
+1. enforces the supported-target preflight;
+2. refreshes the canonical hosts and firewall controls;
+3. verifies the complete protection gate;
+4. aborts before identity mutation if block application or verification fails;
+5. inventories and quiesces identity services;
+6. verifies the gate again immediately before identity writes;
+7. performs Wipe by default;
+8. verifies the gate again before service settle;
+9. restores and settles services;
+10. rechecks the gate, service state, operation ledger, and local postcondition.
+
+This is fail-closed with respect to identity mutation. If the gate is lost after identity writes and before settle, the script reports failure and leaves services quiesced rather than resuming them into a known unblocked path. It does not claim transactional rollback of already-cleared identity state.
+
+`-DryRun` reports planned work but never substitutes the planned configuration for current state or claims that protection is active.
+
+## P5 - Experimental Decoy
+
+Run:
+
+```powershell
+.\degdid.ps1 -Protect -UseDecoy
+```
+
+Decoy clears old state, generates one random `0018`-shaped local value, writes it to the three required LID stores, and updates existing Token `DeviceId` fields consistently. Old tickets and caches are cleared.
+
+Decoy is not canonical because:
+
+- it intentionally leaves a real-shaped identifier in active stores;
+- Status cannot infer server versus local provenance from shape;
+- a decoy is not registered in Microsoft's graph;
+- EXP-F observed only short-window stickiness, not durable behavior; and
+- unblocking can still permit a future real DeviceAdd.
+
+The default `-Protect` action is Wipe.
+
+## P6 - Recovery-safe Unblock
+
+Run from elevated PowerShell:
+
+```powershell
+.\degdid.ps1 -Unblock
+```
+
+Unblock remains callable even if the machine is now domain/Entra/MDM managed, has multiple profiles, has no interactive user, or has an unloaded target hive. It does not touch identity stores.
+
+It removes:
+
+- a valid paired degdid hosts region;
+- current degdid FQDN and `wlidsvc` firewall rules;
+- legacy `degdid-block-*` firewall rules; and
+- degdid deterministic dynamic-keyword objects.
+
+It leaves unrelated hosts lines and firewall rules alone. A malformed or duplicate managed hosts region causes refusal rather than a guessed edit. Successful Unblock warns that a future DeviceAdd can mint a real GDID.
+
+## Status completion oracle
+
+Status shows the actual account, SID, profile, PUID, and GDID values by default so
+the local operator can understand the machine. `-Redact` hashes those values for
+share-safe output. `-Json` changes format, not disclosure level.
+
+The exact verdicts, in precedence order, are:
+
+| Verdict | Condition |
+|---------|-----------|
+| `Error` | Any material read error, opaque DeviceTicket, or unknown active identity value prevents a safe absence conclusion |
+| `UnsupportedEnvironment` | Inspection is readable but the mutation contract is not met |
+| `RealGdidPresent` | At least one real-shaped PUID is present in active or residual inventory |
+| `BlockDegraded` | No real-shaped PUID is present, but the complete block gate is not healthy |
+| `ProtectedNoRealGdid` | Supported/readable environment, no real-shaped PUID, healthy continuous block |
+
+Because Decoy is `0018`-shaped, it can correctly yield `RealGdidPresent`. That verdict is conservative by design.
+
+## Evidence matrix
+
+| Experiment | Classification | Supported statement |
+|------------|----------------|---------------------|
+| EXP-A1 | Observed | No PUID in inspected stores at offline first desktop. |
+| EXP-A4 | Partial H2 | Pre-network hosts block prevented mint for about 90 seconds through a service bounce. |
+| EXP-B | First-mint control | Never-minted image produced a machine-hive PUID about two minutes after unblock without MSA. It is not H7 wipe-remint evidence. |
+| EXP-C | Observed, limited shape | Machine-hive-only cleanup plus hosts block stayed empty in its tested short window and reboot. |
+| EXP-C2 | Observed failure | Naive LID-only wipe did not clear target-user continuity. |
+| EXP-C3 | Partial H3/H4 | Expanded bundle plus continuous hosts block stayed empty across reboot and about four minutes of forced-service soak. |
+| EXP-D | **Partial H5** | Zero-pending WU scan, Defender update, successful prior blocked-period history, and no mint; no controlled pending CU installation during D. |
+| EXP-E | **Partial/inferred H6** | Desktop, WU scan, Defender, and blocked LiveId path observed; most Store/Xbox/Phone Link behavior inferred, not UI-exercised. |
+| EXP-F | Nuanced | No replacement/remint during approximately five-to-six-minute unblocked trials on the exercised image; no long-window conclusion. |
+
+## Validation still pending
+
+The first exact-rewrite Protect run and two reboot checks now pass on the supported
+25H2 guest (`EXP-G` interim). Remaining closure work:
+
+- 24-hour online post-Protect window and remaining session/service/task transitions
+- optional actual-MSA UI/sign-in compatibility run (the real target-user GDID state shape is covered by interim EXP-G)
+- all five Status verdicts against controlled states
+- remaining injected fail-closed transitions and recovery-Unblock matrix
+- FQDN hydration behavior beyond the observed unhydrated hosts-sink configuration
+- Controlled installation of a known pending cumulative update
+- Store/MSA/Xbox/Phone Link/OneDrive/Edge-sync UI checks
+- Direct H7 wipe-then-unblock remint test with a defined DeviceAdd-capable client
+- Feature update on a disposable snapshot
+- Immersive Property versus Token/cache ablation if unique-source attribution is required
+
+Future results must report the actual observation window. "Continuous" describes the required control state, not proof of indefinite effectiveness.
+
+## Explicit residual risk
+
+- Old Microsoft-side records can survive every local action.
+- Unknown local stores may exist beyond the current inventory.
+- Firewall, hosts, DNS, service, or policy changes can degrade the gate later.
+- Other Microsoft services may emit GDID or correlate the installation through other identifiers.
+- Blocking identity paths creates significant and incompletely measured compatibility costs.
+- Unblock, control failure, or a bypass can permit a future DeviceAdd.
+- No result here establishes suppression of the court-reported URL association.

@@ -9,7 +9,15 @@
 credentials.json
 
 # Experiment dumps that may contain hostnames, GDIDs, IPs
+docs/experiments/**/inspect-before.txt
+docs/experiments/**/inspect-after.txt
+docs/experiments/**/inspect-*.txt
 docs/experiments/**/*.raw.txt
+docs/experiments/**/*.redacted.txt
+docs/experiments/**/raw-output*
+docs/experiments/**/redacted-output*
+docs/experiments/**/*-raw*
+docs/experiments/**/*-redacted*
 docs/experiments/**/*-unredacted*
 docs/experiments/**/secrets*
 
@@ -30,4 +38,5 @@ Desktop.ini
 **/*password*.ps1
 **/secrets/
 tools/.last-decoy*
+tools/.lab-*
 **/*-unredacted*

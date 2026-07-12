@@ -1,5 +1,7 @@
 # Glossary
 
+Last updated: 2026-07-11
+
 | Term | Meaning |
 |------|---------|
 | **GDID** | Global Device Identifier — `g:` + decimal form of Device PUID; install-scoped id named in Stokes complaint |
@@ -9,11 +11,14 @@
 | **DDS** | Device Directory Service — MS graph of user↔device associations (`cs.dds.microsoft.com`, etc.) |
 | **CDP** | Connected Devices Platform — Windows client (`cdp.dll`, `CDPSvc`) for cross-device + DDS registration |
 | **MSA** | Microsoft Account |
-| **wlidsvc** | Windows Live ID / Microsoft Account service — mints device identity |
+| **wlidsvc** | Windows Live ID / Microsoft Account Sign-in Assistant service; participates in DeviceAdd and device identity, while the PUID itself is server-assigned |
 | **DO** | Delivery Optimization — reports `UCDOStatus.GlobalDeviceId` |
 | **IdentityCRL** | Registry identity store under `Software\Microsoft\IdentityCRL` |
 | **x-device-token** | MSA device ticket used e.g. for Autopilot ZTD calls |
 | **ZTD** | Zero Touch Deployment / Autopilot path via `ztd.dds.microsoft.com` |
+| **Wipe** | Canonical tool mutation: remove known active real Device PUID state and related known local copies only after the DeviceAdd block gate verifies |
+| **Decoy** | Experimental mutation: install a local `0018…`-shaped value with no claim that Microsoft issued or recognizes it |
+| **Protection gate** | Independent checks that the dual-stack hosts region, FQDN/service firewall rules, and mint-critical path are healthy before identity mutation |
 
 ## Confidence tags
 
@@ -22,5 +27,7 @@
 | `[COURT]` | Stated in legal filings / MS rep via affidavit |
 | `[MSDOC]` | Microsoft Learn / official endpoint docs |
 | `[STATIC]` | From binaries / public PDBs / strings |
-| `[OBSERVED]` | Reproduced on a real machine (ours or cited RE) |
+| `[LAB]` | Reproduced directly in this project's lab or local workstation inspection |
+| `[CITED-RE]` | Behavioral observation or traffic capture reported by a cited external reverse-engineering source; not necessarily reproduced locally |
+| `[OBSERVED]` | Direct observation where the narrower provenance tag is unavailable; nearby text should name the source |
 | `[ASSESSED]` | Strong inference; needs more proof |

@@ -5,6 +5,7 @@ VM: same lab guest as EXP-A4 (local account, no MSA)
 Prior state: online with hosts/firewall blocks -> no `LID`  
 Checkpoint before unblock: `S2-blocked-online-nomint-*`  
 Checkpoint after mint: `S3-control-minted-*`
+Status: **`[OBSERVED]` first-chance mint control**
 
 ## Procedure
 
@@ -28,14 +29,16 @@ LiveId log flipped from repeated `0x800704CF` errors (while blocked) to Informat
 
 ## Verdict
 
-**`[OBSERVED]` Control mint PASS:** Removing registration blocks on an otherwise online local-account image causes a **server-assigned device PUID** (`0018` class) to appear in **SYSTEM and `.DEFAULT`** within ~2 minutes - without MSA sign-in and without HKCU `LID` yet.
+**`[OBSERVED]` First-chance mint control:** Removing registration blocks from this blocked-never-minted, online local-account image was followed by a **server-assigned device PUID** (`0018` class) appearing in **SYSTEM and `.DEFAULT`** within ~2 minutes - without MSA sign-in and without HKCU `LID` yet.
 
 ### Implications
 
-1. **A4 blocks were causal** - same image minted as soon as blocks lifted.
+1. The same image minted promptly after the A4 blocks were lifted, supporting the blocks as the relevant control.
 2. **Anonymous / local-account mint is real** - no MSA required for machine-level Device PUID.
 3. **Inspect must check SYSTEM / `.DEFAULT`**, not only HKCU - user hive can lag or stay empty on local accounts.
 4. Contaminated image now available at `S3-control-minted-*` for EXP-C (local-only rotate).
+
+This is a first-chance mint control. The image had not previously minted and then been wiped, so EXP-B is **not** evidence of wipe-remint behavior.
 
 ## Redacted dump
 

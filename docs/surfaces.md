@@ -4,6 +4,11 @@ Last updated: 2026-07-11
 
 Inventory of places GDID (or its Device PUID twin) is stored, computed against, emitted, or correlated. Companion to `architecture.md`.
 
+The inventory is broader than the tool's release claim. The GDID-only completion
+boundary is continuous DeviceAdd blocking plus removal of known active real PUID
+state on a supported unmanaged, single-user Windows 11 system. General telemetry
+suppression and the exact Stokes URL sensor remain research.
+
 ---
 
 ## 1. Local persistence surfaces
@@ -13,7 +18,7 @@ Inventory of places GDID (or its Device PUID twin) is stored, computed against, 
 | Path | Value | Access | Notes |
 |------|-------|--------|-------|
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | User | Primary readable Device PUID |
-| `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property` | value name = LID hex | User | **Local rehydrate blob** (~346B); wipe LID alone is not enough (`EXP-C3`) |
+| `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property` | value name = LID hex | User | **Required wipe-bundle member / high-confidence rehydrate store** (~346B). It was mapped before the successful expanded wipe, but unique causality was not isolated (`EXP-C3`; ablation open). |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token\*` | `DeviceId`, `DeviceTicket` | User | Per-client tickets; same DeviceId |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties` | (account props) | User | User-side MSA props |
 | `HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | Elevated | Default profile; often present once minted |
@@ -21,6 +26,11 @@ Inventory of places GDID (or its Device PUID twin) is stored, computed against, 
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\NegativeCache\<PUID>_*\` | cache keys | SYSTEM | Keyed by device PUID; scopes/tokens |
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\ThrottleCache\*` | throttle | SYSTEM | Often includes client GUID |
 | `HKLM\SOFTWARE\Microsoft\IdentityStore\Providers\*` | providers | SYSTEM | MSA / AzureAD provider registration |
+
+The identity-store rows above are `[LAB]` unless otherwise stated. EXP-C3 cleared
+Property, Token, LID, and other known state as one bundle; it did not prove that
+Property alone performed the rehydrate. The conservative canonical wipe keeps the
+whole bundle. Decoy mode is experimental.
 
 **Do not** treat Token `DeviceTicket` blobs as safe to log or commit — credential-adjacent.
 
@@ -43,7 +53,7 @@ Inventory of places GDID (or its Device PUID twin) is stored, computed against, 
 | `{5D661950-3475-41CD-A2C3-D671A3162BC1}` | New Outlook (`olkmain.dll`) |
 | `{28520974-…}`, `{2B379600-…}`, `{D6D5A677-…}`, `{E8B2105F-…}` | Built into `wlidsvc` / OnlineId (system MSA clients) |
 | `{E8B2105F-…}` | Sometimes present empty (no DeviceId/ticket) |
-| `{67082621-8D18-4333-9C64-10DE93676363}` | WebView2-associated ticket: independent sandbox traces show `msedgewebview2.exe` reading its `DeviceId` / `DeviceTicket`; exact app-registration display name remains unpublished `[OBSERVED]` |
+| `{67082621-8D18-4333-9C64-10DE93676363}` | WebView2-associated ticket: independent cited sandbox traces show `msedgewebview2.exe` reading its `DeviceId` / `DeviceTicket`; exact app-registration display name remains unpublished `[CITED-RE]` |
 | `{C89E2069-AF13-46DB-9E39-216131494B87}` | CloudApp (CloudPlus) MSA client association — IdentityCRL negative-cache entry is scoped to `tip.cloudapp.net`; not an inbox-Windows attribution `[ASSESSED]` |
 | `{F0C62012-2CEF-4831-B1F7-930682874C86}` | Microsoft Store licensing / `WinStoreAuth`: debug output calls `WinStoreAuth::AuthenticationInternal::SetMsaClientId` with this value `[STATIC]` |
 
@@ -69,7 +79,7 @@ scopes or privileges from the registry key alone.
 
 | Service / binary | Typical start | GDID role |
 |------------------|---------------|-----------|
-| `wlidsvc` | Manual / demand-start | Mint & MSA device identity |
+| `wlidsvc` | Manual / demand-start | DeviceAdd client & MSA device identity; server assigns the PUID |
 | `CDPSvc` | Automatic / often Running | DDS registration, graph |
 | `CDPUserSvc_*` | Automatic (per-user) | User CDP |
 | `dosvc` | Automatic / often Running | Reports GlobalDeviceId in DO/compliance |
@@ -89,18 +99,34 @@ Telemetry policy sample (consumer): `AllowTelemetry` / `MaxTelemetryAllowed` oft
 
 | Endpoint | Direction | When | GDID relevance |
 |----------|-----------|------|----------------|
-| `login.live.com` `/ppsecure/deviceaddcredential.srf` | Out HTTPS | Install, re-provision | **Provisions** Device PUID (response field varies by flow) |
+| `login.live.com` `/ppsecure/deviceaddcredential.srf` | Out HTTPS | Install, re-provision | **Provisions** Device PUID (response field varies by flow) `[CITED-RE]` |
 | `login.live.com` `/RST2.srf` (+ related) | Out HTTPS | Token issue | Device tokens carrying/binding id |
 | `*.login.live.com` | Out HTTPS | Ongoing MSA | Device auth |
-| `cs.dds.microsoft.com` | Out HTTPS | DDS associations | Current Traffic Manager → Azure Front Door route `[MSDOC]` `[OBSERVED]` |
-| `dds.microsoft.com` | Logical DDS service name | CDP string | Bare name is currently DNS NODATA (no A/AAAA) `[STATIC]` `[OBSERVED]` |
-| `aad.cs.dds.microsoft.com` | Out HTTPS | AAD DDS | Current Traffic Manager → Azure Front Door route `[OBSERVED]` |
-| `fd.dds.microsoft.com` | Static string | Unknown | Current NXDOMAIN; legacy/role remains unproven `[STATIC]` `[OBSERVED]` |
-| `cdpcs.access.microsoft.com` | Static string | Unknown | Current NXDOMAIN; legacy/role remains unproven `[STATIC]` `[OBSERVED]` |
-| `ztd.dds.microsoft.com` | Out HTTPS | Autopilot OOBE | Current Traffic Manager → regional Autopilot Azure host; uses x-device-token `[OBSERVED]` |
+| `cs.dds.microsoft.com` | Out HTTPS | DDS associations | Current Traffic Manager → Azure Front Door route `[MSDOC]` `[LAB]` |
+| `dds.microsoft.com` | Logical DDS service name | CDP string | Bare name is currently DNS NODATA (no A/AAAA) `[STATIC]` `[LAB]` |
+| `aad.cs.dds.microsoft.com` | Out HTTPS | AAD DDS | Current Traffic Manager → Azure Front Door route `[LAB]` |
+| `fd.dds.microsoft.com` | Static string | Unknown | Current NXDOMAIN; legacy/role remains unproven `[STATIC]` `[LAB]` |
+| `cdpcs.access.microsoft.com` | Static string | Unknown | Current NXDOMAIN; legacy/role remains unproven `[STATIC]` `[LAB]` |
+| `ztd.dds.microsoft.com` | Out HTTPS | Autopilot OOBE | Current Traffic Manager → regional Autopilot Azure host `[LAB]`; use of x-device-token `[CITED-RE]` |
 | `activity.windows.com` | Out HTTPS | Activity feed | Token scope ties to device id |
 | `assets.activity.windows.com` | Out | Activity assets | Adjacent |
 | `edge.activity.windows.com` | Out | Edge activity | Adjacent |
+
+#### Current tool hardening
+
+The current script integrates three defense-in-depth layers:
+
+1. a canonical hosts region with both `0.0.0.0` and `::` entries;
+2. auto-resolving dynamic-keyword FQDN outbound firewall configuration for the
+   registration and adjacent endpoint set, with address hydration reported rather
+   than assumed; and
+3. a separate outbound service rule for `wlidsvc`, the mint-critical service.
+
+`-Protect` verifies the hosts state, firewall objects, and the
+`login.live.com` mint path before running the canonical wipe. This describes the
+current implementation, not a completed longitudinal result: 24-hour/multi-reboot
+and MSA-contaminated 25H2 validation remain open. Windows 11 24H2 is outside the
+advertised mutation scope until separately validated.
 
 ### 3.2 Reporting / delivery (known or likely carriers)
 
@@ -128,7 +154,7 @@ On the configured resolver (2026-07-11), `cs.dds.microsoft.com` chained via
 `ztd.dds.microsoft.com` chained via `aps.trafficmanager.net` to a regional
 `autopilotservice-prod-*.cloudapp.azure.com` host. `fd.dds.microsoft.com` and
 `cdpcs.access.microsoft.com` still returned NXDOMAIN; bare `dds.microsoft.com`
-returned NODATA. `[OBSERVED]`
+returned NODATA. `[LAB]`
 
 No established TCP to those IPs at either idle snapshot. DNS answers are
 resolver/region/time dependent, not endpoint policy.
@@ -191,15 +217,21 @@ Disabling these reduces *use* of the graph (not always the existence of LID):
 
 ### 6.1 Supported enterprise control
 
-`./Device/Vendor/MSFT/Policy/Config/Connectivity/AllowConnectedDevices = 0`
+[`./Device/Vendor/MSFT/Policy/Config/Connectivity/AllowConnectedDevices = 0`](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-connectivity)
 is the supported device-scope policy to make CDP unavailable after reboot.
 `[MSDOC]` It is a CDP/cross-device control, not a server-history eraser or a
 guarantee that every identity plane stops.
 
-Microsoft warns that blocking/disabling connected-device and related account settings
-can remove the Microsoft Entra sign-in option in Autopilot pre-provisioning and lead
-to local-account OOBE instead. Treat it as a post-enrollment, pilot-tested control —
-not a universal “DDS off, Entra unchanged” switch. `[MSDOC]`
+The Autopilot warning belongs to a different control. Microsoft says that
+**[disabling the Microsoft Account Sign-in Assistant (`wlidsvc`)](https://learn.microsoft.com/en-us/autopilot/pre-provision)**
+during Autopilot
+pre-provisioning can hide the Microsoft Entra sign-in option and lead to the
+EULA/local-account flow. That warning is not stated for
+`AllowConnectedDevices`. `[MSDOC]`
+
+The tool does not disable `wlidsvc`; it blocks the service's outbound traffic as
+defense in depth. It makes no Autopilot-compatibility claim and refuses mutation on
+domain-joined, Entra-joined/registered, or MDM-enrolled systems.
 
 ### 6.2 Recall boundary
 
@@ -223,13 +255,14 @@ prove that unrelated Windows services cannot emit a GDID while Recall is enabled
 
 ---
 
-## 8. Surface priority for countermeasures (preview)
+## 8. Surface priority for the current tool
 
-1. **Mint path** — `login.live.com` deviceadd (hard to block without breaking MSA/device auth)
-2. **Graph announce** — CDP → DDS (`cs.dds.microsoft.com`, …)
-3. **Activity emit** — `activity.windows.com`
-4. **Local continuity** — IdentityCRL `LID` + tickets
+1. **Mint path** — continuously block `login.live.com` DeviceAdd; expect MSA/device-auth breakage
+2. **Local continuity** — canonical expanded wipe of known active real PUID stores and known copies
+3. **Graph announce** — CDP → DDS (`cs.dds.microsoft.com`, …), blocked as defense in depth
+4. **Activity emit** — `activity.windows.com`, blocked as defense in depth
 5. **Reporting** — DO/compliance GlobalDeviceId
-6. **Unknown court channel** — URL/time association (lab needed)
+6. **Unknown court channel** — URL/time association (open research, not a release gate)
 
-Full mitigation design belongs in `countermeasures.md` (Phase 3).
+Decoy mutation is experimental. General telemetry suppression is not part of the
+tool's completion claim.
