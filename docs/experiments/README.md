@@ -17,5 +17,5 @@ These notes use a **GDID-only completion gate**: a run may close only the local 
 | [EXP-D](./EXP-D-windows-update-blocks.md) | **H5 partial** | Zero-pending WU scan + Defender + history; no controlled pending CU |
 | [EXP-E](./EXP-E-breakage-catalog.md) | **Partial / inferred** | Named UI paths were not exercised |
 | [EXP-F](./EXP-F-unblock-remint.md) | Observed - short window | Decoy/wipe unblock behavior; **wipe-remint not proven**; EXP-B is first-chance mint only |
-| [EXP-G](./EXP-G-pending-closure-hardening-matrix.md) | **In progress / bounded interim evidence** | Immediate Protect, two reboots, and service/task triggers passed after three fail-closed defects were fixed; 24-hour/remaining matrix pending |
+| [EXP-G](./EXP-G-pending-closure-hardening-matrix.md) | **Failed at ~7h; fix pending rerun** | Machine PUID rehydrated locally from SYSTEM/`.DEFAULT` Property and Token stores despite healthy network blocks; three-hive wipe added |
 | [EXP-H](./EXP-H-msa-local-rehydrate.md) | **Observed field failure; fix pending rerun** | MSA profile restored the same user LID locally under healthy blocks; targeted MSA device-credential cleanup added |

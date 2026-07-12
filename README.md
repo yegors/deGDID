@@ -73,8 +73,8 @@ The default protection action is:
 ```
 
 This applies the block gate and performs the expanded **Wipe**. The wipe covers known
-target-user, SYSTEM, and `.DEFAULT` active stores, target-user Immersive Property
-and Token device fields, the MSA `SSO_POP_Device` and WindowsLive `didlogical`
+target-user, SYSTEM, and `.DEFAULT` LID, Immersive Property, Token DeviceId, and
+DeviceTicket stores; the MSA `SSO_POP_Device` and WindowsLive `didlogical`
 device credentials, matching machine NegativeCache entries, and target-user
 TokenBroker/ConnectedDevicesPlatform caches. It then waits, re-inventories, and
 requires old or newly rehydrated PUIDs and device credentials to be absent.
@@ -171,13 +171,12 @@ Historical experiments used a Hyper-V Windows 11 25H2 build 26200 local-account 
 | EXP-D | WU COM scan returned zero pending updates, Defender signature update succeeded, prior blocked-period update history was successful, and no PUID appeared. | **Partial H5:** no controlled pending cumulative update was downloaded and installed during this experiment. |
 | EXP-E | Desktop access, update scan, and Defender worked; the LiveId path was blocked. Store/Xbox/Phone Link effects were mostly inferred from blocked dependencies and package presence. | **Partial/inferred** breakage catalog; UI workflows were not exercised. |
 | EXP-F | A decoy was not replaced during about six minutes unblocked; an unblocked wipe stayed empty for about five to six minutes on the exercised image. | Nuanced short result; neither eventual remint nor durable safety was proved. |
-| EXP-G (in progress) | The exact rewrite completed Protect with 23 successful operations, no active/residual real-shaped PUID, and `ProtectedNoRealGdid`; the same verdict held after two reboots and service/task triggers. Three earlier attempts failed closed and exposed implementation defects that were fixed. | 24-hour, remaining transition, and full recovery matrices remain pending; FQDN keywords were configured but unhydrated under the hosts sink. |
+| EXP-G | Immediate Protect, two reboots, and service/task triggers initially passed, but a machine PUID returned after roughly seven hours. | LiveId attempts failed under healthy blocks; the PUID existed in SYSTEM/`.DEFAULT` Property and Token stores that were not cleared. Three-hive cleanup added; rerun pending. |
 | EXP-H | On an MSA-connected profile, the healthy block and 38 successful wipe operations still allowed the same old user LID to reappear locally by settle. | Targeted MSA device-credential cleanup was added; rerun is pending. |
 
-Exact-rewrite validation is now in progress rather than untouched. Immediate Protect,
-dual-stack resolution, firewall configuration, and two reboot checks passed on the
-25H2 guest. The 24-hour window, remaining fail-closed/recovery matrix, and EXP-H
-MSA remediation rerun remain open.
+Exact-rewrite validation is active and useful precisely because it caught delayed
+state. EXP-G now requires a fresh three-hive Protect/soak rerun. The remaining
+transition/recovery matrix and EXP-H MSA persistence rerun also remain open.
 
 ## Expected compatibility impact
 

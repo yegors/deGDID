@@ -2343,34 +2343,71 @@ function Invoke-TargetDeviceCredentialOperation {
 function Get-GdidSourceModel {
   param([object]$Target)
 
-  $identityRoot = '{0}\SOFTWARE\Microsoft\IdentityCRL' -f $Target.HivePath
   $localAppDataResult = Get-TargetLocalAppData -Target $Target
   $localAppData = $localAppDataResult.Path
+  $identityScopes = @(
+    [pscustomobject]@{
+      Name = 'TargetUser'
+      HivePath = $Target.HivePath
+      NativeHivePath = $Target.Sid
+    },
+    [pscustomobject]@{
+      Name = 'Default'
+      HivePath = 'Registry::HKEY_USERS\.DEFAULT'
+      NativeHivePath = '.DEFAULT'
+    },
+    [pscustomobject]@{
+      Name = 'System'
+      HivePath = 'Registry::HKEY_USERS\S-1-5-18'
+      NativeHivePath = 'S-1-5-18'
+    }
+  )
 
   return [pscustomobject]@{
     Target = $Target
     ProfilePath = $Target.ProfilePath
     Errors = @($localAppDataResult.Error | Where-Object { $_ })
+    IdentityScopes = $identityScopes
     Lids = @(
-      [pscustomobject]@{
-        Name = 'TargetUserLid'
-        Path = $identityRoot + '\ExtendedProperties'
-      },
-      [pscustomobject]@{
-        Name = 'DefaultLid'
-        Path = 'Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties'
-      },
-      [pscustomobject]@{
-        Name = 'SystemLid'
-        Path = 'Registry::HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL\ExtendedProperties'
+      foreach ($scope in $identityScopes) {
+        [pscustomobject]@{
+          Name = '{0}Lid' -f $scope.Name
+          Scope = $scope.Name
+          Path = (
+            '{0}\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' -f
+            $scope.HivePath
+          )
+        }
       }
     )
-    PropertyPath = $identityRoot + '\Immersive\production\Property'
-    PropertyNativePath = (
-      '{0}\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property' -f
-      $Target.Sid
+    Properties = @(
+      foreach ($scope in $identityScopes) {
+        [pscustomobject]@{
+          Name = '{0}Property' -f $scope.Name
+          Scope = $scope.Name
+          Path = (
+            '{0}\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property' -f
+            $scope.HivePath
+          )
+          NativePath = (
+            '{0}\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property' -f
+            $scope.NativeHivePath
+          )
+        }
+      }
     )
-    TokenPath = $identityRoot + '\Immersive\production\Token'
+    Tokens = @(
+      foreach ($scope in $identityScopes) {
+        [pscustomobject]@{
+          Name = '{0}Token' -f $scope.Name
+          Scope = $scope.Name
+          Path = (
+            '{0}\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token' -f
+            $scope.HivePath
+          )
+        }
+      }
+    )
     NegativeCachePath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
     CredentialAccessMode = Get-TargetCredentialAccessMode -Target $Target
     CredentialTargets = @($script:DeviceCredentialTargets)
@@ -2532,10 +2569,28 @@ function Get-GdidLocationLabel {
     return 'LID store'
   }
   if ($Entry.SourceKind -eq 'ImmersiveProperty') {
-    return 'current user Immersive Property'
+    if ($Entry.Source -eq 'TargetUserProperty') {
+      return 'current user Immersive Property'
+    }
+    if ($Entry.Source -eq 'DefaultProperty') {
+      return 'default-profile machine Immersive Property'
+    }
+    if ($Entry.Source -eq 'SystemProperty') {
+      return 'SYSTEM machine Immersive Property'
+    }
+    return 'Immersive Property'
   }
   if ($Entry.SourceKind -eq 'TokenDeviceId') {
-    return 'current user device-token copy'
+    if ($Entry.Source -like 'TargetUserToken:*') {
+      return 'current user device-token copy'
+    }
+    if ($Entry.Source -like 'DefaultToken:*') {
+      return 'default-profile machine device-token copy'
+    }
+    if ($Entry.Source -like 'SystemToken:*') {
+      return 'SYSTEM machine device-token copy'
+    }
+    return 'device-token copy'
   }
   if ($Entry.SourceKind -eq 'NegativeCache') {
     return 'machine NegativeCache'
@@ -2548,7 +2603,7 @@ function Get-GdidInventory {
 
   $entries = New-Object System.Collections.Generic.List[object]
   $errors = New-Object System.Collections.Generic.List[string]
-  $propertyNames = New-Object System.Collections.Generic.List[string]
+  $propertyValues = New-Object System.Collections.Generic.List[object]
   $tokenKeys = New-Object System.Collections.Generic.List[object]
   $negativeCacheKeys = New-Object System.Collections.Generic.List[object]
   $cacheArtifacts = New-Object System.Collections.Generic.List[object]
@@ -2580,57 +2635,71 @@ function Get-GdidInventory {
     }
   }
 
-  try {
-    if (Test-Path -LiteralPath $Model.PropertyPath -ErrorAction Stop) {
-      $key = Get-Item -LiteralPath $Model.PropertyPath -ErrorAction Stop
-      foreach ($name in @($key.GetValueNames())) {
-        [void]$propertyNames.Add($name)
-        Add-InventoryEntry `
-          -Entries $entries `
-          -Category 'Active' `
-          -SourceKind 'ImmersiveProperty' `
-          -Source 'TargetUserProperty' `
-          -Identifier $name
+  foreach ($propertySource in $Model.Properties) {
+    try {
+      if (Test-Path -LiteralPath $propertySource.Path -ErrorAction Stop) {
+        $key = Get-Item -LiteralPath $propertySource.Path -ErrorAction Stop
+        foreach ($name in @($key.GetValueNames())) {
+          [void]$propertyValues.Add([pscustomobject]@{
+            Name = $name
+            Scope = $propertySource.Scope
+            Path = $propertySource.Path
+            NativePath = $propertySource.NativePath
+          })
+          Add-InventoryEntry `
+            -Entries $entries `
+            -Category 'Active' `
+            -SourceKind 'ImmersiveProperty' `
+            -Source $propertySource.Name `
+            -Identifier $name
+        }
       }
+    } catch {
+      [void]$errors.Add((
+        '{0}: {1}' -f $propertySource.Name, $_.Exception.Message
+      ))
     }
-  } catch {
-    [void]$errors.Add(('TargetUserProperty: {0}' -f $_.Exception.Message))
   }
 
-  try {
-    if (Test-Path -LiteralPath $Model.TokenPath -ErrorAction Stop) {
-      foreach (
-        $tokenKey in @(
-          Get-ChildItem -LiteralPath $Model.TokenPath -ErrorAction Stop
-        )
-      ) {
-        $item = Get-Item -LiteralPath $tokenKey.PSPath -ErrorAction Stop
-        $valueNames = @($item.GetValueNames())
-        [void]$tokenKeys.Add([pscustomobject]@{
-          Path = $tokenKey.PSPath
-          Name = $tokenKey.PSChildName
-          HasDeviceId = $valueNames -contains 'DeviceId'
-          HasDeviceTicket = $valueNames -contains 'DeviceTicket'
-        })
-        if ($valueNames -contains 'DeviceId') {
-          $deviceId = $item.GetValue(
-            'DeviceId',
-            $null,
-            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+  foreach ($tokenSource in $Model.Tokens) {
+    try {
+      if (Test-Path -LiteralPath $tokenSource.Path -ErrorAction Stop) {
+        foreach (
+          $tokenKey in @(
+            Get-ChildItem -LiteralPath $tokenSource.Path -ErrorAction Stop
           )
-          if ($null -ne $deviceId) {
-            Add-InventoryEntry `
-              -Entries $entries `
-              -Category 'Active' `
-              -SourceKind 'TokenDeviceId' `
-              -Source ('Token:{0}' -f $tokenKey.PSChildName) `
-              -Identifier ([string]$deviceId)
+        ) {
+          $item = Get-Item -LiteralPath $tokenKey.PSPath -ErrorAction Stop
+          $valueNames = @($item.GetValueNames())
+          [void]$tokenKeys.Add([pscustomobject]@{
+            Path = $tokenKey.PSPath
+            Name = $tokenKey.PSChildName
+            Scope = $tokenSource.Scope
+            HasDeviceId = $valueNames -contains 'DeviceId'
+            HasDeviceTicket = $valueNames -contains 'DeviceTicket'
+          })
+          if ($valueNames -contains 'DeviceId') {
+            $deviceId = $item.GetValue(
+              'DeviceId',
+              $null,
+              [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+            )
+            if ($null -ne $deviceId) {
+              Add-InventoryEntry `
+                -Entries $entries `
+                -Category 'Active' `
+                -SourceKind 'TokenDeviceId' `
+                -Source ('{0}Token:{1}' -f $tokenSource.Scope, $tokenKey.PSChildName) `
+                -Identifier ([string]$deviceId)
+            }
           }
         }
       }
+    } catch {
+      [void]$errors.Add((
+        '{0}: {1}' -f $tokenSource.Name, $_.Exception.Message
+      ))
     }
-  } catch {
-    [void]$errors.Add(('TargetUserToken: {0}' -f $_.Exception.Message))
   }
 
   try {
@@ -2716,7 +2785,7 @@ function Get-GdidInventory {
   return [pscustomobject]@{
     Entries = $entries.ToArray()
     Errors = $errors.ToArray()
-    PropertyValueNames = $propertyNames.ToArray()
+    PropertyValues = $propertyValues.ToArray()
     TokenKeys = $tokenKeys.ToArray()
     NegativeCacheKeys = $negativeCacheKeys.ToArray()
     CacheArtifacts = $cacheArtifacts.ToArray()
@@ -3012,15 +3081,21 @@ function Invoke-IdentityStoreChanges {
     [switch]$DryRun
   )
 
-  foreach ($propertyName in $Before.PropertyValueNames) {
-    $name = $propertyName
+  foreach ($propertyValue in $Before.PropertyValues) {
+    $name = $propertyValue.Name
+    $nativePath = $propertyValue.NativePath
+    $scopeName = $propertyValue.Scope
     [void](Add-OperationResult `
       -Results $Results `
-      -OperationName ('ClearProperty:{0}' -f (Get-Sha256Hex $name).Substring(0, 8)) `
+      -OperationName (
+        'ClearProperty:{0}:{1}' -f
+        $scopeName,
+        (Get-Sha256Hex $name).Substring(0, 8)
+      ) `
       -DryRun:$DryRun `
       -Action {
         $propertyKey = [Microsoft.Win32.Registry]::Users.OpenSubKey(
-          $Model.PropertyNativePath,
+          $nativePath,
           $true
         )
         if (-not $propertyKey) {
@@ -3225,7 +3300,7 @@ function Test-WipePostcondition {
     ) {
       [void]$reasons.Add('An LID or Token DeviceId value remains.')
     }
-    if ($Inventory.PropertyValueNames.Count -gt 0) {
+    if ($Inventory.PropertyValues.Count -gt 0) {
       [void]$reasons.Add('Immersive Property values remain.')
     }
     if (@($Inventory.TokenKeys | Where-Object { $_.HasDeviceTicket }).Count -gt 0) {
@@ -3696,7 +3771,7 @@ function Get-DegdidStatus {
       Entries = @()
       Errors = @()
       CacheArtifacts = @()
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CredentialInspectionAvailable = $false
       DeviceCredentials = @()

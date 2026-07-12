@@ -24,6 +24,8 @@ suppression and the exact Stokes URL sensor remain research.
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties` | (account props) | User | User-side MSA props |
 | `HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | Elevated | Default profile; often present once minted |
 | `HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | SYSTEM | SYSTEM copy; often present once minted |
+| `.DEFAULT` / SYSTEM `IdentityCRL\Immersive\production\Property` | value name = device PUID | Elevated | Delayed EXP-G machine-hive rehydrate store; same pattern as target-user Property |
+| `.DEFAULT` / SYSTEM `IdentityCRL\Immersive\production\Token\*` | `DeviceId`, `DeviceTicket` | Elevated | Delayed EXP-G found nine DeviceId copies in each machine hive |
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\NegativeCache\<PUID>_*\` | cache keys | SYSTEM | Keyed by device PUID; scopes/tokens |
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\ThrottleCache\*` | throttle | SYSTEM | Often includes client GUID |
 | `HKLM\SOFTWARE\Microsoft\IdentityStore\Providers\*` | providers | SYSTEM | MSA / AzureAD provider registration |

@@ -153,10 +153,10 @@ Blocking Activity/DDS names may reduce those specific graph calls, but it is not
 The known source model includes:
 
 - target-user, `.DEFAULT`, and SYSTEM `ExtendedProperties\LID`;
-- target-user `Immersive\production\Property` values;
-- target-user Token `DeviceId` and `DeviceTicket` fields;
+- target-user, `.DEFAULT`, and SYSTEM `Immersive\production\Property` values;
+- target-user, `.DEFAULT`, and SYSTEM Token `DeviceId` and `DeviceTicket` fields;
 - target-user Credential Manager device entries `SSO_POP_Device` and
-  WindowsLive `didlogical` when elevation belongs to the target user;
+  WindowsLive `didlogical`;
 - machine IdentityCRL NegativeCache keys whose names embed a captured PUID;
 - target-user TokenBroker cache contents; and
 - target-user ConnectedDevicesPlatform cache contents.
@@ -183,6 +183,10 @@ Wipe succeeds only if:
 - `[OBSERVED]` EXP-C: machine-hive-only PUID state was cleared and remained empty through the tested online/reboot window with hosts blocking.
 - `[OBSERVED]` EXP-C2: after HKCU contamination, clearing only LID values was insufficient; the same target-user PUID returned after reboot while `login.live.com` remained hosts-blocked.
 - `[OBSERVED]` EXP-C3: the successful expanded bundle cleared Immersive Property, Token fields/tickets, LID values, and caches under continuous hosts blocking. The stores remained empty after reboot and about four minutes of forced-service soak.
+- `[OBSERVED]` delayed EXP-G failure: after immediate success, two reboots, and
+  service/task triggers, a machine PUID returned at roughly seven hours. LiveId
+  SOAP/token attempts failed under healthy blocks; the PUID was present locally in
+  SYSTEM and `.DEFAULT` Property plus Token stores omitted by the earlier wipe.
 
 EXP-C3 showed that Immersive `Property\<PUID>` was present across the failing naive wipe and was removed in the successful expanded bundle. The implementation therefore treats Immersive Property as a **required member of the successful cleanup bundle**. It is not described as the unique restore source unless a future controlled ablation isolates it from Token and cache cleanup.
 

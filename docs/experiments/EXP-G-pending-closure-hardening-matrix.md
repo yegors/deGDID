@@ -1,6 +1,6 @@
 # EXP-G - Pending closure / hardening matrix
 
-Status: **IN PROGRESS — immediate Protect + two-reboot validation recorded; 24-hour gate still pending**
+Status: **FAILED AT ~7 HOURS — machine-hive Property/Token rehydrate found; expanded three-hive fix pending rerun**
 
 This began as an experiment design. The bounded interim observations below are now recorded; unexecuted rows remain pending and no longer-duration outcome is implied.
 
@@ -78,20 +78,63 @@ Boundaries:
 
 - G1 is supported for sinkholed A/AAAA and the integrated service rule on this
   guest; it was not an IPv6-only routed-network test.
-- The two-reboot portion of G2 is complete, but the 24-hour duration is still
-  running and must not be inferred from these immediate checks.
+- The two-reboot portion of G2 passed initially, but the duration row later failed
+  at roughly seven hours when a machine PUID returned.
 - G4 passed for the named service/task triggers and 60-second post-trigger window.
-- G5 is closed for the GDID-state objective because the real target-user and
-  machine residual stores were populated and cleared. Actual MSA sign-in/UI
-  compatibility remains optional follow-on work.
+- G5's target-user shape passed, but machine-hive Immersive Property/Token coverage
+  was incomplete and invalidates full closure.
 - G7 has concrete fail-closed evidence for three naturally encountered defects;
   the complete injected transition matrix remains pending.
 - G8 remains covered by pure hosts tests, not yet by the disposable-guest matrix.
 
+## Delayed failure — 2026-07-12
+
+At the later soak check, Status found one PUID in SYSTEM and `.DEFAULT` LID while:
+
+- the canonical hosts region remained valid;
+- A and AAAA remained sinkholed;
+- TCP to `login.live.com` remained blocked; and
+- the enforced `wlidsvc` service rule remained active.
+
+The returned PUID differed from the pre-wipe target-user PUID. LiveId logs showed
+repeated SOAP attempts (`6115`) followed by `WLIDAcquireTokens` failure
+`0x80048051`; no successful DeviceAdd completion was observed.
+
+The current machine PUID was also present locally in both SYSTEM and `.DEFAULT`:
+
+- `Immersive\production\Property\<PUID>`; and
+- nine Token `DeviceId` copies in each hive.
+
+Interpretation: this is another local rehydrate gap, not evidence of successful
+server mint under the block. The current rewrite inventoried/cleared Property and
+Token only in the target-user hive. The source model now covers target-user,
+`.DEFAULT`, and SYSTEM LID + Property + Token/Ticket stores symmetrically.
+
+The failed state was checkpointed before cleanup. A fresh Protect/soak rerun is
+required; the prior immediate and reboot passes remain useful but do not satisfy G2.
+
+## Three-hive remediation rerun
+
+The updated source model inventoried and cleared LID, Immersive Property, Token
+DeviceId, and DeviceTicket state in the target-user, `.DEFAULT`, and SYSTEM hives.
+
+Immediate rerun result:
+
+- canonical hosts and the actual DeviceAdd path verified;
+- Protect returned `0`;
+- all 40 operations succeeded;
+- active and residual real-shaped PUID count was `0`;
+- device-ticket and device-credential count was `0`; and
+- verdict was `ProtectedNoRealGdid`.
+
+An eight-hour threshold check is armed to exceed the prior roughly seven-hour
+failure point. This immediate result does not yet close G2.
+
 ## Closure rule
 
-To close the advertised 25H2/build-26200 gate, finish the 24-hour portion of G2,
-run the remaining G3 transitions, and finish the disposable-guest G7/G8 matrix.
+To close the validated 25H2/build-26200 line, rerun canonical Protect with the
+three-hive source model, restart G2, run the remaining G3 transitions, and finish
+the disposable-guest G7/G8 matrix.
 G6 is optional expansion to 24H2. G9 is optional, but H5 remains partial until a
 controlled pending CU is exercised. G10 is optional research because the public
 tool already clears the full conservative bundle; Immersive Property remains a

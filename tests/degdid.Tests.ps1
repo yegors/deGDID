@@ -325,7 +325,7 @@ Describe 'degdid wipe postcondition' {
       ActiveRealPuids = @()
       ResidualRealPuids = @()
       Entries = @()
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CacheArtifacts = @()
       CredentialInspectionAvailable = $true
@@ -347,7 +347,7 @@ Describe 'degdid wipe postcondition' {
       ActiveRealPuids = @()
       ResidualRealPuids = @('0018000FC8CB93CC')
       Entries = @()
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CacheArtifacts = @()
       CredentialInspectionAvailable = $true
@@ -371,7 +371,7 @@ Describe 'degdid wipe postcondition' {
       ActiveRealPuids = @('0018ABCDEF123456')
       ResidualRealPuids = @()
       Entries = @()
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CacheArtifacts = @()
       CredentialInspectionAvailable = $true
@@ -401,7 +401,7 @@ Describe 'degdid wipe postcondition' {
       ActiveRealPuids = @($decoy)
       ResidualRealPuids = @()
       Entries = $entries
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CacheArtifacts = @()
       CredentialInspectionAvailable = $true
@@ -431,7 +431,7 @@ Describe 'degdid wipe postcondition' {
           IsReal = $false
         }
       )
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CacheArtifacts = @()
       CredentialInspectionAvailable = $true
@@ -455,7 +455,7 @@ Describe 'degdid wipe postcondition' {
       ActiveRealPuids = @()
       ResidualRealPuids = @()
       Entries = @()
-      PropertyValueNames = @('other')
+      PropertyValues = @('other')
       TokenKeys = @([pscustomobject]@{ HasDeviceTicket = $true })
       CacheArtifacts = @([pscustomobject]@{ Present = $true })
       CredentialInspectionAvailable = $true
@@ -478,7 +478,7 @@ Describe 'degdid wipe postcondition' {
       ActiveRealPuids = @()
       ResidualRealPuids = @()
       Entries = @()
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       CacheArtifacts = @()
       CredentialInspectionAvailable = $true
@@ -550,6 +550,35 @@ Describe 'degdid profile topology' {
   }
 }
 
+Describe 'degdid machine and user identity source model' {
+  It 'covers LID, Property, and Token stores in all three hives' {
+    Mock Get-TargetLocalAppData {
+      [pscustomobject]@{
+        Path = 'C:\Users\Test\AppData\Local'
+        Error = $null
+      }
+    }
+    $sid = (
+      [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    ).User.Value
+    $target = [pscustomobject]@{
+      Sid = $sid
+      HivePath = 'Registry::HKEY_USERS\test'
+      ProfilePath = 'C:\Users\Test'
+      Resolution = 'DirectCurrentSession'
+    }
+    $model = Get-GdidSourceModel -Target $target
+
+    $model.Lids.Count | Should Be 3
+    $model.Properties.Count | Should Be 3
+    $model.Tokens.Count | Should Be 3
+    ($model.Properties.Name -join ',') |
+      Should Be 'TargetUserProperty,DefaultProperty,SystemProperty'
+    ($model.Tokens.Name -join ',') |
+      Should Be 'TargetUserToken,DefaultToken,SystemToken'
+  }
+}
+
 Describe 'degdid fail-closed service sequencing' {
   BeforeEach {
     $script:testModel = [pscustomobject]@{
@@ -565,7 +594,7 @@ Describe 'degdid fail-closed service sequencing' {
       ActiveRealPuids = @()
       ResidualRealPuids = @()
       Entries = @()
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       NegativeCacheKeys = @()
       CacheArtifacts = @()
@@ -656,7 +685,7 @@ Describe 'degdid MSA device credential cleanup' {
   It 'removes each present targeted device credential' {
     $results = New-Object System.Collections.Generic.List[object]
     $before = [pscustomobject]@{
-      PropertyValueNames = @()
+      PropertyValues = @()
       TokenKeys = @()
       NegativeCacheKeys = @()
       CredentialInspectionAvailable = $true
