@@ -197,7 +197,10 @@ The script does not install wildcard hosts entries or static DNS-derived IP rule
 `-Block` must produce:
 
 - one canonical managed hosts region;
-- one `0.0.0.0` and one `::` entry per exact FQDN;
+- one `0.0.0.0` and one `::` entry per exact FQDN.
+
+When local firewall policy permits, it should also refresh/report:
+
 - one auto-resolving dynamic-keyword object per FQDN, with current address
   hydration reported separately;
 - one enabled outbound deny over the complete keyword set; it is not assumed
@@ -205,12 +208,15 @@ The script does not install wildcard hosts entries or static DNS-derived IP rule
 - one enabled outbound deny for `svchost.exe` service `wlidsvc`; and
 - no legacy `degdid-block-*` firewall rules.
 
+Those supplemental rules are not mandatory if another firewall policy/state exists
+or cannot be rewritten and the actual DeviceAdd path still verifies blocked.
+
 The independent mint-path check must show:
 
 - sinkholed A and AAAA answers for `login.live.com`;
 - no unexpected address;
 - TCP 443 blocked when online; or
-- `OfflineAccepted` only when the complete hosts and firewall configuration is already valid.
+- `OfflineAccepted` only when the complete canonical hosts configuration is valid.
 
 Do not blanket-block `*.microsoft.com`. The activity and DDS names in this set support the GDID registration/graph boundary; their presence is not evidence of general telemetry or court-channel suppression.
 

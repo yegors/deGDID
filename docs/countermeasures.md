@@ -24,7 +24,7 @@ This is a **GDID-only completion gate**. It does not claim to:
 
 Mutating actions other than Unblock require all of the following:
 
-- Windows 11 25H2 build 26200 as the enabled test target; exact-rewrite closure is pending and other builds remain outside scope;
+- Windows 11 build 22000 or newer; 25H2 build 26200 is the lab-validated line and other builds warn;
 - unmanaged: no domain join, Entra join/registration/workplace join, or MDM enrollment;
 - exactly one loaded target human-profile hive; dormant profile artifacts warn but do not refuse;
 - an active interactive user, or an authenticated session that maps to the sole loaded profile;
@@ -71,7 +71,7 @@ An upstream gateway block can cover earlier setup traffic, but it is outside the
 - `[OBSERVED]` EXP-A4: applying the then-current hosts block before first network access kept the inspected stores empty through a service bounce and about 90 seconds online; LiveId reported `0x800704CF`.
 - `[OBSERVED]` EXP-B: removing those blocks from the never-minted image allowed a first machine-hive PUID to appear in about two minutes without MSA sign-in.
 
-EXP-A4 is a short hosts-era observation. It does not prove indefinite prevention and does not validate the current full dual-stack/firewall implementation.
+EXP-A4 is a short hosts-era observation. It does not prove indefinite prevention or validate the current dual-stack/path-verification implementation.
 
 ## P2 - Continuous DeviceAdd block
 
@@ -97,31 +97,35 @@ There is no wildcard hosts entry. The managed `hosts` region renders one `0.0.0.
 
 ### Firewall controls
 
-The current implementation:
+When local policy allows, the current implementation also:
 
 1. creates one deterministic, auto-resolving Windows Firewall dynamic-keyword object for each FQDN;
 2. creates one enabled outbound deny rule over the complete dynamic-keyword set; and
 3. creates a separate enabled outbound deny bound to `svchost.exe` service `wlidsvc`.
 
-The dynamic FQDN configuration avoids freezing one transient DNS snapshot, but an
+These firewall objects are defense in depth rather than release gates. The dynamic
+FQDN configuration avoids freezing one transient DNS snapshot, but an
 AutoResolve rule is not enforced until addresses hydrate. In the first exact-rewrite
 guest run, hosts suppression left the keyword address sets empty. Status therefore
-reports hydration separately, and the gate relies on the service-scoped `wlidsvc`
-deny as the independent firewall mint control.
+reports hydration separately. Existing local or policy-owned firewall rules are
+preserved where possible, and supplemental firewall failure does not abort when the
+required hosts state and actual DeviceAdd connection test pass.
 
 ### Gate verification
 
-Protection is healthy only when all of these checks pass:
+Protection is healthy when all required checks pass:
 
 - the managed hosts markers are structurally valid and their contents are canonical;
 - every expected IPv4 and IPv6 sinkhole line is present;
-- every dynamic keyword exists exactly once and has the expected AutoResolve FQDN configuration; current address hydration is reported separately;
-- the FQDN deny rule is unique, enabled, outbound, blocking, and references the complete keyword set;
-- the `wlidsvc` service rule is unique, enabled, outbound, blocking, and service-bound;
-- no legacy `degdid-block-*` firewall rules remain;
 - `login.live.com` A answers are only `0.0.0.0`;
 - `login.live.com` AAAA answers are only the unspecified IPv6 sink; and
-- TCP 443 cannot connect, or the machine is explicitly offline with the complete configuration already valid.
+- TCP 443 cannot connect, or the machine is explicitly offline with the complete
+  hosts configuration already valid.
+
+Dynamic-keyword hydration, the managed FQDN rule, the `wlidsvc` rule, staging rules,
+legacy rules, and firewall policy are still reported. They explain defense-in-depth
+state but do not force one exact firewall topology when the required path already
+verifies blocked.
 
 The gate is a current-state test, not a durability certificate. Keep it active continuously and re-run Status after Windows servicing, security-policy changes, firewall resets, DNS-stack changes, or hosts-file edits.
 
@@ -151,9 +155,16 @@ The known source model includes:
 - target-user, `.DEFAULT`, and SYSTEM `ExtendedProperties\LID`;
 - target-user `Immersive\production\Property` values;
 - target-user Token `DeviceId` and `DeviceTicket` fields;
+- target-user Credential Manager device entries `SSO_POP_Device` and
+  WindowsLive `didlogical` when elevation belongs to the target user;
 - machine IdentityCRL NegativeCache keys whose names embed a captured PUID;
 - target-user TokenBroker cache contents; and
 - target-user ConnectedDevicesPlatform cache contents.
+
+Because UAC elevation has a different logon-session credential namespace, the
+script does not trust SID equality alone. It uses a short-lived limited scheduled
+task in the target interactive session to inspect/delete only those two device
+credentials, then removes the helper task and result file.
 
 Before deleting files, the script verifies that each cache is under the resolved target profile and contains no reparse points. It inventories before and after quiescing identity services, captures every real-shaped PUID it can read, performs each operation with explicit accounting, restores the original service state, waits 12 seconds with eligible identity services started for settle, and re-inventories.
 
@@ -270,6 +281,7 @@ Because Decoy is `0018`-shaped, it can correctly yield `RealGdidPresent`. That v
 | EXP-D | **Partial H5** | Zero-pending WU scan, Defender update, successful prior blocked-period history, and no mint; no controlled pending CU installation during D. |
 | EXP-E | **Partial/inferred H6** | Desktop, WU scan, Defender, and blocked LiveId path observed; most Store/Xbox/Phone Link behavior inferred, not UI-exercised. |
 | EXP-F | Nuanced | No replacement/remint during approximately five-to-six-minute unblocked trials on the exercised image; no long-window conclusion. |
+| EXP-H | Observed MSA field failure | Same old user LID rehydrated locally under healthy blocks after all earlier bundle operations succeeded; targeted device-credential cleanup added, rerun pending. |
 
 ## Validation still pending
 
@@ -277,7 +289,7 @@ The first exact-rewrite Protect run and two reboot checks now pass on the suppor
 25H2 guest (`EXP-G` interim). Remaining closure work:
 
 - 24-hour online post-Protect window and remaining session/service/task transitions
-- optional actual-MSA UI/sign-in compatibility run (the real target-user GDID state shape is covered by interim EXP-G)
+- EXP-H rerun proving the MSA device-credential cleanup prevents the old user LID from returning
 - all five Status verdicts against controlled states
 - remaining injected fail-closed transitions and recovery-Unblock matrix
 - FQDN hydration behavior beyond the observed unhydrated hosts-sink configuration

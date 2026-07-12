@@ -27,7 +27,7 @@ The research track is intentionally broader than the shipped tool. `degdid.ps1` 
 - Inspect the supported environment and known GDID stores
 - Redact identifiers by default and expose explicit human/JSON status modes
 - Apply a canonical dual-stack hosts region
-- Configure auto-resolving FQDN firewall objects with explicit hydration reporting, plus a `wlidsvc` service-scoped outbound deny
+- Verify canonical dual-stack hosts and the actual DeviceAdd path; add/report FQDN and `wlidsvc` firewall controls when policy permits
 - Verify the mint path independently before identity mutation
 - Perform canonical expanded Wipe, or experimental Decoy
 - Verify local postconditions after a service-settle interval
@@ -49,7 +49,7 @@ The research track is intentionally broader than the shipped tool. `degdid.ps1` 
 
 `-Block`, `-Wipe`, `-Decoy`, and `-Protect` require:
 
-- Windows 11 25H2 build 26200; other builds remain unadvertised until separately validated
+- Windows 11 build 22000 or newer; warn outside the lab-validated 25H2 build 26200 line
 - no domain join
 - no Entra join, registration, enterprise join, or workplace join
 - no detected MDM enrollment
@@ -103,6 +103,7 @@ The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from s
 
 - [ ] Run the exact current rewrite end to end on a supported clean Windows 11 guest
 - [ ] Run the exact current rewrite on a guest contaminated in machine and target-user stores
+- [ ] Re-run EXP-H on the MSA-connected profile after targeted device-credential cleanup
 - [ ] Exercise every Status verdict against controlled state
 - [ ] Verify dynamic-keyword FQDN and `wlidsvc` rules on the guest firewall
 - [ ] Verify fail-closed behavior at each block-gate transition
@@ -115,9 +116,10 @@ Implementation completion and end-to-end lab validation are separate states. The
 `EXP-G` now records a successful exact-rewrite Protect run, two reboot checks, and
 service/task triggers on the 25H2 guest, plus three naturally encountered defects
 that failed closed and were fixed. The real target-user and residual contamination
-shape was exercised. The 24-hour window, clean never-mint clone, and remaining
-transition/recovery matrix are still open; actual MSA UI sign-in is optional
-compatibility work.
+shape was exercised. EXP-H then exposed an MSA-specific local user-LID rehydrate
+path; targeted device-credential cleanup is implemented but needs a rerun. The
+24-hour window, clean never-mint clone, and remaining transition/recovery matrix
+are also open. MSA UI usability remains separate compatibility work.
 
 ## Phase 0 - Foundations
 
@@ -178,7 +180,7 @@ progress, with immediate Protect and two reboots passing in interim `EXP-G`.
 |-------|----------------|---------|
 | **Inspect** | Status environment, target, hosts, firewall, mint path, active stores, residual caches | Produce one explicit verdict without exposing identifiers by default |
 | **Prevent** | Offline OOBE, then `-Block` before first network access | Avoid first DeviceAdd after a local profile exists |
-| **Block** | Dual-stack hosts + FQDN dynamic-keyword configuration/hydration report + `wlidsvc` outbound service rule | Keep the DeviceAdd path unavailable without pretending an unhydrated FQDN rule is enforced |
+| **Block** | Required dual-stack hosts + actual DeviceAdd path test; optional/reportable FQDN and `wlidsvc` firewall layers | Keep the mint path unavailable without demanding one exact firewall topology |
 | **Wipe** | Clear known active and matching residual state, caches, and tickets | Canonical local removal path |
 | **Protect** | Apply/verify Block, then Wipe by default | Preserve ordering and fail closed |
 | **Decoy** | Generate and install one local `0018`-shaped value after cleanup | Experimental continuity research only |

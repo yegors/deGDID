@@ -15,10 +15,9 @@ For the supported unmanaged, single-user Windows 11 scope, completion means:
 General telemetry suppression, complete mapping of adjacent Microsoft endpoints, and
 the exact Stokes URL-association sensor are **not** release gates.
 
-- [x] Integrate canonical dual-stack hosts entries, auto-resolving dynamic-keyword
-  FQDN firewall rules, and a separate outbound `wlidsvc` service rule. The current
-  script verifies these layers and the mint path before mutation. This is
-  implementation status, not longitudinal lab proof.
+- [x] Require canonical dual-stack hosts plus actual DeviceAdd path verification.
+  Dynamic-keyword and `wlidsvc` firewall layers are refreshed/reported when policy
+  permits but no single firewall topology is mandatory.
 - [ ] Hold `ProtectedNoRealGdid` for at least 24 hours across multiple reboots with
   the current integrated rules; verify the DeviceAdd gate remains healthy and no
   known active real PUID appears. `EXP-G` has passed immediate Protect plus two
@@ -26,10 +25,15 @@ the exact Stokes URL-association sensor are **not** release gates.
 - [x] Run `-Protect` against the real contaminated state shape: target-user LID,
   Property, Token/Tickets, machine residual cache, and related files. Interim
   `EXP-G` cleared that state and held through two reboots plus service/task
-  triggers. Actual MSA UI/sign-in behavior remains optional compatibility work.
-- [x] Narrow the advertised mutation scope to Windows 11 25H2/build 26200.
-- [ ] Run the full closure matrix on Windows 11 24H2 before adding that build to
-  the supported mutation contract.
+  triggers.
+- [ ] Re-run EXP-H on the MSA-connected profile. The same old user LID returned
+  locally after the earlier bundle cleared; targeted `SSO_POP_Device` and
+  WindowsLive `didlogical` credential cleanup is now implemented. Actual MSA UI
+  compatibility remains separate from this GDID-state check.
+- [x] Support Windows 11 build 22000 or newer with an explicit warning outside the
+  lab-validated 25H2/build-26200 line.
+- [ ] Run the full closure matrix on additional builds to replace generic support
+  warnings with build-specific evidence.
 
 ## Generation
 

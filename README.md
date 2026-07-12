@@ -14,7 +14,7 @@ That is a GDID completion gate. It is not a general telemetry, browser-privacy, 
 
 `-Block`, `-Wipe`, `-Decoy`, and `-Protect` mutate only when all of the following are established:
 
-- Windows 11 **25H2, build 26200** (the currently enabled test target; exact-rewrite closure is still pending)
+- Windows 11 build 22000 or newer; 25H2 build 26200 is the lab-validated line and other builds receive an explicit warning
 - not domain joined
 - not Entra joined, registered, or workplace joined
 - not MDM enrolled
@@ -27,8 +27,6 @@ Mutation is refused when any of those facts is false or cannot be established. M
 than one simultaneously loaded human-profile hive is unsupported because the tool
 does not guess between active targets. Dormant sandbox/tool/profile artifacts are
 counted and warned about, but they are not mistaken for active human sessions.
-
-Other Windows 11 releases, including 24H2, remain research targets rather than advertised mutation support until the same closure matrix is run there.
 
 `-Status` remains available for inspection on unsupported systems. `-Unblock` is the recovery exception: it does not require a supported profile topology and removes only degdid-managed network state, although a real unblock still requires elevation.
 
@@ -51,12 +49,16 @@ Court reporting in 2026 established that Microsoft held a GDID-to-URL/time/IP as
 
 ## Implemented protection gate
 
-`-Block` installs and verifies all of the following:
+`-Block` requires and verifies:
 
 1. A canonical managed `hosts` region containing both `0.0.0.0` and `::` entries for the registration host set.
-2. Windows Firewall dynamic-keyword objects for each exact FQDN and one outbound deny rule over that set; current address hydration is reported separately and is not assumed when hosts suppress DNS.
-3. A separate outbound service-scoped deny rule for `wlidsvc`, which is the independent firewall mint control when FQDN addresses are unhydrated.
-4. A mint-path check: canonical hosts state, valid firewall/service state, sinkholed A and AAAA answers for `login.live.com`, and a failed TCP connection, or an explicitly accepted offline state.
+2. A real mint-path check: sinkholed A and AAAA answers for `login.live.com` and a failed TCP connection, or an explicitly accepted offline state.
+
+The script also refreshes its FQDN and `wlidsvc` firewall rules when local policy
+allows them. Those rules are defense in depth, not a mandatory brand-name gate:
+existing policy, another enforced rule, or a locked-down firewall environment may
+already block the path. A supplemental firewall warning does not abort Protect when
+the canonical hosts state and actual DeviceAdd path both verify.
 
 The controls must remain in place continuously. The lab observations below cover stated short windows; they do not prove that a control will remain effective indefinitely. Re-run `-Status` after Windows servicing, firewall-policy changes, security-product changes, or manual hosts-file edits.
 
@@ -70,7 +72,18 @@ The default protection action is:
 .\degdid.ps1 -Protect
 ```
 
-This applies the block gate and performs the expanded **Wipe**. The wipe covers known target-user, SYSTEM, and `.DEFAULT` active stores, target-user Immersive Property and Token device fields, matching machine NegativeCache entries, and target-user TokenBroker and ConnectedDevicesPlatform caches. It then waits, re-inventories, and requires the old PUIDs and any other real-shaped PUID to be absent.
+This applies the block gate and performs the expanded **Wipe**. The wipe covers known
+target-user, SYSTEM, and `.DEFAULT` active stores, target-user Immersive Property
+and Token device fields, the MSA `SSO_POP_Device` and WindowsLive `didlogical`
+device credentials, matching machine NegativeCache entries, and target-user
+TokenBroker/ConnectedDevicesPlatform caches. It then waits, re-inventories, and
+requires old or newly rehydrated PUIDs and device credentials to be absent.
+
+MSA device credentials are tied to the interactive logon session and are not
+reliably visible through the separate elevated UAC session. When needed, Status or
+Protect creates a short-lived, limited scheduled task under the target interactive
+user to inspect/delete only those two device targets, then removes the task and its
+result file. It does not delete the user's MSA account credential.
 
 Decoy mode is available for research:
 
@@ -115,6 +128,16 @@ The verdict is exactly one of:
 
 Verdict precedence follows the table from top to bottom. `ProtectedNoRealGdid` is the only complete canonical state.
 
+If Windows marks a downloaded copy as Internet-origin, inspect the script and remove
+that file marker once:
+
+```powershell
+Unblock-File .\degdid.ps1
+```
+
+`Unblock-File` only removes the download security prompt. It is unrelated to the
+script's `-Unblock` action, which removes GDID network controls.
+
 ## Commands
 
 | Command | Meaning |
@@ -149,11 +172,12 @@ Historical experiments used a Hyper-V Windows 11 25H2 build 26200 local-account 
 | EXP-E | Desktop access, update scan, and Defender worked; the LiveId path was blocked. Store/Xbox/Phone Link effects were mostly inferred from blocked dependencies and package presence. | **Partial/inferred** breakage catalog; UI workflows were not exercised. |
 | EXP-F | A decoy was not replaced during about six minutes unblocked; an unblocked wipe stayed empty for about five to six minutes on the exercised image. | Nuanced short result; neither eventual remint nor durable safety was proved. |
 | EXP-G (in progress) | The exact rewrite completed Protect with 23 successful operations, no active/residual real-shaped PUID, and `ProtectedNoRealGdid`; the same verdict held after two reboots and service/task triggers. Three earlier attempts failed closed and exposed implementation defects that were fixed. | 24-hour, remaining transition, and full recovery matrices remain pending; FQDN keywords were configured but unhydrated under the hosts sink. |
+| EXP-H | On an MSA-connected profile, the healthy block and 38 successful wipe operations still allowed the same old user LID to reappear locally by settle. | Targeted MSA device-credential cleanup was added; rerun is pending. |
 
 Exact-rewrite validation is now in progress rather than untouched. Immediate Protect,
 dual-stack resolution, firewall configuration, and two reboot checks passed on the
-25H2 guest. The 24-hour window, remaining fail-closed/recovery matrix, and optional
-MSA/UI compatibility studies remain open.
+25H2 guest. The 24-hour window, remaining fail-closed/recovery matrix, and EXP-H
+MSA remediation rerun remain open.
 
 ## Expected compatibility impact
 

@@ -252,6 +252,61 @@ Describe 'degdid firewall enforcement status' {
     (Test-FirewallEnforcementStatus 'ProfileInactive NoRemoteAddress') |
       Should Be $false
   }
+
+  It 'accepts the permanent mint rule while a duplicate staging rule is optimized out' {
+    Mock Test-StagingMintServiceRuleEnforced { $false }
+    Mock Get-FirewallState {
+      [pscustomobject]@{ MintServiceRuleValid = $true }
+    }
+    (Test-MintServiceBarrierEnforced) | Should Be $true
+  }
+
+  It 'rejects a handoff when neither mint rule is enforced' {
+    Mock Test-StagingMintServiceRuleEnforced { $false }
+    Mock Get-FirewallState {
+      [pscustomobject]@{ MintServiceRuleValid = $false }
+    }
+    (Test-MintServiceBarrierEnforced) | Should Be $false
+  }
+}
+
+Describe 'degdid generic protection gate' {
+  It 'accepts a verified hosts and DeviceAdd path despite supplemental firewall state' {
+    Mock Read-HostsDocument {
+      [pscustomobject]@{
+        State = [pscustomobject]@{
+          State = 'Valid'
+          Canonical = $true
+        }
+      }
+    }
+    Mock Get-FirewallState {
+      [pscustomobject]@{ Health = 'Malformed' }
+    }
+    Mock Get-MintPathState {
+      [pscustomobject]@{ Health = 'Valid' }
+    }
+    (Get-ProtectionGate).Healthy | Should Be $true
+  }
+
+  It 'does not abort Block when only the optional firewall refresh fails' {
+    Mock Invoke-HostsDocumentChange {
+      [pscustomobject]@{ StateAfter = 'Valid' }
+    }
+    Mock Set-FirewallBlock {
+      [pscustomobject]@{
+        Success = $false
+        Message = 'policy-owned firewall'
+      }
+    }
+    Mock Invoke-DnsFlush {}
+    Mock Get-ProtectionGate {
+      [pscustomobject]@{ Healthy = $true }
+    }
+    $result = Invoke-BlockConfiguration
+    $result.Success | Should Be $true
+    $result.Message | Should Match 'actual DeviceAdd path verified'
+  }
 }
 
 Describe 'degdid wipe postcondition' {
@@ -273,6 +328,8 @@ Describe 'degdid wipe postcondition' {
       PropertyValueNames = @()
       TokenKeys = @()
       CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $result = Test-WipePostcondition `
       -Inventory $inventory `
@@ -293,6 +350,8 @@ Describe 'degdid wipe postcondition' {
       PropertyValueNames = @()
       TokenKeys = @()
       CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $result = Test-WipePostcondition `
       -Inventory $inventory `
@@ -315,6 +374,8 @@ Describe 'degdid wipe postcondition' {
       PropertyValueNames = @()
       TokenKeys = @()
       CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $result = Test-WipePostcondition `
       -Inventory $inventory `
@@ -343,6 +404,8 @@ Describe 'degdid wipe postcondition' {
       PropertyValueNames = @()
       TokenKeys = @()
       CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $result = Test-WipePostcondition `
       -Inventory $inventory `
@@ -371,6 +434,8 @@ Describe 'degdid wipe postcondition' {
       PropertyValueNames = @()
       TokenKeys = @()
       CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $result = Test-WipePostcondition `
       -Inventory $inventory `
@@ -393,6 +458,8 @@ Describe 'degdid wipe postcondition' {
       PropertyValueNames = @('other')
       TokenKeys = @([pscustomobject]@{ HasDeviceTicket = $true })
       CacheArtifacts = @([pscustomobject]@{ Present = $true })
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $result = Test-WipePostcondition `
       -Inventory $inventory `
@@ -402,6 +469,35 @@ Describe 'degdid wipe postcondition' {
       -Model $model
     $result.Success | Should Be $false
     $result.Reasons.Count | Should Be 2
+  }
+
+  It 'rejects a wipe when an MSA device credential remains' {
+    $inventory = [pscustomobject]@{
+      Errors = @()
+      AllRealPuids = @()
+      ActiveRealPuids = @()
+      ResidualRealPuids = @()
+      Entries = @()
+      PropertyValueNames = @()
+      TokenKeys = @()
+      CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @(
+        [pscustomobject]@{
+          Target = 'MicrosoftAccount:target=SSO_POP_Device'
+          Present = $true
+        }
+      )
+    }
+    $result = Test-WipePostcondition `
+      -Inventory $inventory `
+      -CapturedPuids @() `
+      -Mode Wipe `
+      -DecoyLid $null `
+      -Model $model
+    $result.Success | Should Be $false
+    ($result.Reasons -contains 'An MSA device credential remains.') |
+      Should Be $true
   }
 }
 
@@ -460,6 +556,8 @@ Describe 'degdid fail-closed service sequencing' {
       Errors = @()
       Lids = @()
       CachePaths = @()
+      CredentialAccessMode = 'DirectCurrentSession'
+      CredentialTargets = @()
     }
     $script:emptyInventory = [pscustomobject]@{
       Errors = @()
@@ -471,6 +569,8 @@ Describe 'degdid fail-closed service sequencing' {
       TokenKeys = @()
       NegativeCacheKeys = @()
       CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
     }
     $script:serviceSnapshot = [pscustomobject]@{
       Success = $true
@@ -549,6 +649,60 @@ Describe 'degdid operation ledger scoping' {
     $ok | Should Be $true
     $script:observedServiceName | Should Be 'wlidsvc'
     $results[0].Name | Should Be 'StopService:wlidsvc'
+  }
+}
+
+Describe 'degdid MSA device credential cleanup' {
+  It 'removes each present targeted device credential' {
+    $results = New-Object System.Collections.Generic.List[object]
+    $before = [pscustomobject]@{
+      PropertyValueNames = @()
+      TokenKeys = @()
+      NegativeCacheKeys = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @(
+        [pscustomobject]@{
+          Target = 'MicrosoftAccount:target=SSO_POP_Device'
+          Present = $true
+        },
+        [pscustomobject]@{
+          Target = 'WindowsLive:target=virtualapp/didlogical'
+          Present = $true
+        }
+      )
+    }
+    $model = [pscustomobject]@{
+      Lids = @()
+      CachePaths = @()
+      Target = [pscustomobject]@{ Sid = 'test' }
+      CredentialTargets = @(
+        'MicrosoftAccount:target=SSO_POP_Device',
+        'WindowsLive:target=virtualapp/didlogical'
+      )
+    }
+    Mock Invoke-TargetDeviceCredentialOperation {
+      @(
+        [pscustomobject]@{
+          Target = 'MicrosoftAccount:target=SSO_POP_Device'
+          Present = $false
+        },
+        [pscustomobject]@{
+          Target = 'WindowsLive:target=virtualapp/didlogical'
+          Present = $false
+        }
+      )
+    }
+
+    Invoke-IdentityStoreChanges `
+      -Model $model `
+      -Before $before `
+      -CapturedPuids @() `
+      -Mode Wipe `
+      -DecoyLid $null `
+      -Results $results
+
+    Assert-MockCalled Invoke-TargetDeviceCredentialOperation 1 -Scope It
+    @($results | Where-Object { -not $_.Success }).Count | Should Be 0
   }
 }
 

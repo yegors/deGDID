@@ -165,6 +165,10 @@ HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property
 HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token\<client>\
   DeviceId = same PUID
   DeviceTicket = per-client auth blob  (do not casually dump)
+
+Target-user Credential Manager on MSA-connected profiles:
+  MicrosoftAccount:target=SSO_POP_Device
+  WindowsLive:target=virtualapp/didlogical
 ```
 
 `[LAB]` EXP-C2/C3 found the Property value present with the old PUID after an
@@ -172,6 +176,12 @@ LID-only cleanup, then removed it as part of the successful expanded wipe bundle
 alongside Token values and other known state. It is therefore a **required wipe-bundle
 member and high-confidence rehydrate store**, but EXP-C3 did not ablate the stores one
 at a time. Unique causality remains unproven.
+
+`[OBSERVED]` EXP-H added an MSA-specific boundary: after the earlier
+Property/Token/LID/file-cache bundle was cleared under healthy blocks, the same old
+target-user LID returned alone. The profile still had device Credential Manager
+entries. The tool now clears those targeted device credentials; confirmation rerun
+is pending before calling them the proven source.
 
 Also observed on a typical online install (`[LAB]`):
 

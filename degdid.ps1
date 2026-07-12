@@ -125,6 +125,10 @@ $script:SettleSeconds = 12
 $script:DegdidExitCode = 0
 $script:SupportedBuild = 26200
 $script:SupportedDisplayVersion = '25H2'
+$script:DeviceCredentialTargets = @(
+  'MicrosoftAccount:target=SSO_POP_Device',
+  'WindowsLive:target=virtualapp/didlogical'
+)
 
 $script:BlockHosts = @(
   'login.live.com',
@@ -1177,7 +1181,6 @@ function Get-FirewallState {
     $ruleValid -and
     $mintServiceRuleValid -and
     $infrastructureHealthy -and
-    $stagingRules.Count -eq 0 -and
     $legacyRules.Count -eq 0
   ) {
     $health = 'Valid'
@@ -1205,6 +1208,8 @@ function Get-FirewallState {
 }
 
 function Remove-ManagedFirewallRules {
+  param([switch]$PreserveMintServiceRule)
+
   $rules = @(
     Get-NetFirewallRule `
       -DisplayName ($script:RulePrefix + '*') `
@@ -1225,6 +1230,12 @@ function Remove-ManagedFirewallRules {
       Sort-Object Name -Unique
   )
   foreach ($rule in $allRules) {
+    if (
+      $PreserveMintServiceRule -and
+      $rule.Name -eq $script:MintServiceRuleName
+    ) {
+      continue
+    }
     Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop
   }
 }
@@ -1285,6 +1296,47 @@ function Test-StagingMintServiceRuleEnforced {
   }
 }
 
+function Test-MintServiceBarrierEnforced {
+  if (Test-StagingMintServiceRuleEnforced) {
+    return $true
+  }
+  try {
+    return [bool](Get-FirewallState).MintServiceRuleValid
+  } catch {
+    return $false
+  }
+}
+
+function Wait-StagingMintServiceRuleEnforced {
+  param([int]$TimeoutSeconds = 5)
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    if (Test-StagingMintServiceRuleEnforced) {
+      return $true
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Wait-PermanentMintServiceRuleEnforced {
+  param([int]$TimeoutSeconds = 5)
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    try {
+      if ([bool](Get-FirewallState).MintServiceRuleValid) {
+        return $true
+      }
+    } catch {
+      Write-Verbose ('Permanent mint-rule check: {0}' -f $_.Exception.Message)
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
 function Remove-DegdidDynamicKeyword {
   param([string]$HostName)
 
@@ -1303,10 +1355,7 @@ function Remove-DegdidDynamicKeyword {
 }
 
 function Set-FirewallBlock {
-  param(
-    [switch]$DryRun,
-    [switch]$UseExistingStaging
-  )
+  param([switch]$DryRun)
 
   if (-not (Test-DynamicFirewallSupport)) {
     return [pscustomobject]@{
@@ -1327,13 +1376,11 @@ function Set-FirewallBlock {
   }
 
   try {
-    if (-not $UseExistingStaging) {
-      New-StagingMintServiceRule
-      if (-not (Test-StagingMintServiceRuleEnforced)) {
-        throw 'Staging wlidsvc rule is not fully enforced in ActiveStore.'
-      }
-    }
-    Remove-ManagedFirewallRules
+    $existingState = Get-FirewallState
+    $preserveMintService = [bool]$existingState.MintServiceRuleValid
+    Remove-StagingMintServiceRule
+    Remove-ManagedFirewallRules `
+      -PreserveMintServiceRule:$preserveMintService
     foreach ($hostName in $script:BlockHosts) {
       Remove-DegdidDynamicKeyword -HostName $hostName
     }
@@ -1362,19 +1409,21 @@ function Set-FirewallBlock {
       -RemoteDynamicKeywordAddresses $ids.ToArray() `
       -ErrorAction Stop | Out-Null
 
-    New-NetFirewallRule `
-      -Name $script:MintServiceRuleName `
-      -DisplayName $script:MintServiceRuleDisplayName `
-      -Group $script:FirewallGroup `
-      -Description 'degdid blocks all wlidsvc outbound DeviceAdd traffic' `
-      -Direction Outbound `
-      -Action Block `
-      -Enabled True `
-      -Profile Any `
-      -Protocol Any `
-      -Program (Join-Path $env:SystemRoot 'System32\svchost.exe') `
-      -Service 'wlidsvc' `
-      -ErrorAction Stop | Out-Null
+    if (-not $preserveMintService) {
+      New-NetFirewallRule `
+        -Name $script:MintServiceRuleName `
+        -DisplayName $script:MintServiceRuleDisplayName `
+        -Group $script:FirewallGroup `
+        -Description 'degdid blocks all wlidsvc outbound DeviceAdd traffic' `
+        -Direction Outbound `
+        -Action Block `
+        -Enabled True `
+        -Profile Any `
+        -Protocol Any `
+        -Program (Join-Path $env:SystemRoot 'System32\svchost.exe') `
+        -Service 'wlidsvc' `
+        -ErrorAction Stop | Out-Null
+    }
 
     # Hosts entries intentionally suppress normal DNS. Generate explicit
     # no-hosts DNS traffic so the FQDN callout can hydrate the mint keyword
@@ -1389,7 +1438,9 @@ function Set-FirewallBlock {
         -QuickTimeout `
         -ErrorAction SilentlyContinue | Out-Null
     }
-    Remove-StagingMintServiceRule
+    if (-not (Wait-PermanentMintServiceRuleEnforced)) {
+      throw 'The supplemental wlidsvc rule was created but is not actively enforced.'
+    }
   } catch {
     return [pscustomobject]@{
       Success = $false
@@ -1401,9 +1452,9 @@ function Set-FirewallBlock {
 
   $state = Get-FirewallState
   return [pscustomobject]@{
-    Success = $state.Health -eq 'Valid'
+    Success = [bool]$state.MintServiceRuleValid
     DryRun = $false
-    Message = 'Dynamic-keyword objects and outbound rule applied.'
+    Message = 'Supplemental firewall configuration refreshed.'
     State = $state
   }
 }
@@ -1552,8 +1603,7 @@ function Get-MintPathState {
 
   $configurationValid = (
     $HostsState.State -eq 'Valid' -and
-    $HostsState.Canonical -and
-    $FirewallState.Health -eq 'Valid'
+    $HostsState.Canonical
   )
   $tcpProbe = 'SkippedConfigurationDegraded'
   $tcpBlocked = $false
@@ -1625,7 +1675,6 @@ function Get-ProtectionGate {
     Healthy = (
       $hostsState.State -eq 'Valid' -and
       $hostsState.Canonical -and
-      $firewallState.Health -eq 'Valid' -and
       $mintPath.Health -eq 'Valid'
     )
     Hosts = $hostsState
@@ -1787,14 +1836,18 @@ function Get-EnvironmentState {
     $build = [int]$currentVersion.CurrentBuildNumber
     $displayVersion = [string]$currentVersion.DisplayVersion
     $productName = [string]$currentVersion.ProductName
-    if (
+    if ($build -lt 22000) {
+      [void]$unsupported.Add(
+        'Windows 11 build 22000 or newer is required; found {0} build {1}.' -f
+        $displayVersion,
+        $build
+      )
+    } elseif (
       $build -ne $script:SupportedBuild -or
       $displayVersion -ne $script:SupportedDisplayVersion
     ) {
-      [void]$unsupported.Add(
-        'Validated mutation scope is Windows 11 25H2 build 26200; found {0} build {1}.' -f
-        $displayVersion,
-        $build
+      [void]$warnings.Add(
+        'This Windows build is supported generically but is not the lab-validated 25H2 build 26200 line.'
       )
     }
   } catch {
@@ -1947,7 +2000,8 @@ function Get-EnvironmentState {
     Supported = ($unsupported.Count -eq 0 -and $targetFailures.Count -eq 0)
     IsAdministrator = Test-IsAdministrator
     IsWindows11 = ($build -ge 22000 -and $workstation)
-    IsSupportedBuild = (
+    IsSupportedBuild = ($build -ge 22000 -and $workstation)
+    IsLabValidatedBuild = (
       $build -eq $script:SupportedBuild -and
       $displayVersion -eq $script:SupportedDisplayVersion -and
       $workstation
@@ -2081,6 +2135,211 @@ function Get-TargetLocalAppData {
   }
 }
 
+function Get-DeviceCredentialState {
+  param([string[]]$Targets = $script:DeviceCredentialTargets)
+
+  $cmdkey = Join-Path $env:SystemRoot 'System32\cmdkey.exe'
+  $output = @(& $cmdkey /list 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "cmdkey /list exited with code $LASTEXITCODE"
+  }
+  $text = $output -join "`n"
+  return @(
+    foreach ($targetName in $Targets) {
+      [pscustomobject]@{
+        Target = $targetName
+        Present = $text.IndexOf(
+          $targetName,
+          [System.StringComparison]::OrdinalIgnoreCase
+        ) -ge 0
+      }
+    }
+  )
+}
+
+function Remove-DeviceCredential {
+  param([string]$TargetName)
+
+  $cmdkey = Join-Path $env:SystemRoot 'System32\cmdkey.exe'
+  & $cmdkey ("/delete:{0}" -f $TargetName) 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "cmdkey could not remove device credential $TargetName"
+  }
+  $remaining = @(
+    Get-DeviceCredentialState -Targets @($TargetName) |
+      Where-Object { $_.Present }
+  )
+  if ($remaining.Count -gt 0) {
+    throw "Device credential $TargetName is still present after deletion."
+  }
+}
+
+function Get-TargetCredentialAccessMode {
+  param([object]$Target)
+
+  $currentSid = (
+    [System.Security.Principal.WindowsIdentity]::GetCurrent()
+  ).User.Value
+  if ($Target.Resolution -eq 'InteractiveConsole') {
+    if (Test-IsAdministrator) {
+      return 'InteractiveTask'
+    }
+    if ($currentSid -eq $Target.Sid) {
+      return 'DirectInteractive'
+    }
+  }
+  if ($currentSid -eq $Target.Sid) {
+    return 'DirectCurrentSession'
+  }
+  return 'Unavailable'
+}
+
+function Invoke-InteractiveCredentialTask {
+  param(
+    [object]$Target,
+    [string[]]$Targets,
+    [ValidateSet('Inspect', 'Delete')]
+    [string]$Mode
+  )
+
+  $taskName = 'degdid-credential-{0}' -f [Guid]::NewGuid().ToString('N')
+  $resultPath = Join-Path (
+    Join-Path $Target.ProfilePath 'AppData\Local\Temp'
+  ) ('{0}.json' -f $taskName)
+  if (Test-Path -LiteralPath $resultPath) {
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction Stop
+  }
+  $targetLiteral = (
+    $Targets |
+      ForEach-Object { "'{0}'" -f $_.Replace("'", "''") }
+  ) -join ','
+  $resultLiteral = $resultPath.Replace("'", "''")
+  $deleteLiteral = $(if ($Mode -eq 'Delete') { '$true' } else { '$false' })
+  $helper = @"
+`$ErrorActionPreference = 'Stop'
+`$targets = @($targetLiteral)
+`$delete = $deleteLiteral
+`$cmdkey = Join-Path `$env:SystemRoot 'System32\cmdkey.exe'
+function Get-State {
+  `$output = @(& `$cmdkey /list 2>&1)
+  if (`$LASTEXITCODE -ne 0) { throw "cmdkey /list failed: `$LASTEXITCODE" }
+  `$text = `$output -join "`n"
+  @(
+    foreach (`$targetName in `$targets) {
+      [pscustomobject]@{
+        Target = `$targetName
+        Present = `$text.IndexOf(
+          `$targetName,
+          [System.StringComparison]::OrdinalIgnoreCase
+        ) -ge 0
+      }
+    }
+  )
+}
+`$errors = @()
+if (`$delete) {
+  foreach (`$state in @(Get-State | Where-Object { `$_.Present })) {
+    & `$cmdkey ("/delete:{0}" -f `$state.Target) 2>&1 | Out-Null
+    if (`$LASTEXITCODE -ne 0) {
+      `$errors += "cmdkey delete failed for `$(`$state.Target)"
+    }
+  }
+}
+`$result = [pscustomobject]@{
+  States = @(Get-State)
+  Errors = @(`$errors)
+}
+[System.IO.File]::WriteAllText(
+  '$resultLiteral',
+  (`$result | ConvertTo-Json -Depth 4),
+  [System.Text.UTF8Encoding]::new(`$false)
+)
+"@
+  $encoded = [Convert]::ToBase64String(
+    [System.Text.Encoding]::Unicode.GetBytes($helper)
+  )
+  $powershell = Join-Path $env:SystemRoot (
+    'System32\WindowsPowerShell\v1.0\powershell.exe'
+  )
+  $action = New-ScheduledTaskAction `
+    -Execute $powershell `
+    -Argument ('-NoProfile -NonInteractive -EncodedCommand {0}' -f $encoded)
+  $principal = New-ScheduledTaskPrincipal `
+    -UserId $Target.Sid `
+    -LogonType Interactive `
+    -RunLevel Limited
+
+  try {
+    Register-ScheduledTask `
+      -TaskName $taskName `
+      -Action $action `
+      -Principal $principal `
+      -Force `
+      -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    $deadline = (Get-Date).AddSeconds(30)
+    while (
+      -not (Test-Path -LiteralPath $resultPath) -and
+      (Get-Date) -lt $deadline
+    ) {
+      Start-Sleep -Milliseconds 200
+    }
+    if (-not (Test-Path -LiteralPath $resultPath)) {
+      $info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+      throw 'Interactive credential helper produced no result. LastTaskResult={0}' -f
+        $(if ($info) { $info.LastTaskResult } else { 'unknown' })
+    }
+    $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop |
+      ConvertFrom-Json
+    if (@($result.Errors).Count -gt 0) {
+      throw (@($result.Errors) -join '; ')
+    }
+    return @($result.States)
+  } finally {
+    Unregister-ScheduledTask `
+      -TaskName $taskName `
+      -Confirm:$false `
+      -ErrorAction SilentlyContinue
+    Remove-Item `
+      -LiteralPath $resultPath `
+      -Force `
+      -ErrorAction SilentlyContinue
+  }
+}
+
+function Invoke-TargetDeviceCredentialOperation {
+  param(
+    [object]$Target,
+    [string[]]$Targets,
+    [ValidateSet('Inspect', 'Delete')]
+    [string]$Mode
+  )
+
+  $accessMode = Get-TargetCredentialAccessMode -Target $Target
+  if ($accessMode -eq 'InteractiveTask') {
+    return @(
+      Invoke-InteractiveCredentialTask `
+        -Target $Target `
+        -Targets $Targets `
+        -Mode $Mode
+    )
+  }
+  if ($accessMode -in @('DirectInteractive', 'DirectCurrentSession')) {
+    if ($Mode -eq 'Delete') {
+      foreach (
+        $state in @(
+          Get-DeviceCredentialState -Targets $Targets |
+            Where-Object { $_.Present }
+        )
+      ) {
+        Remove-DeviceCredential -TargetName $state.Target
+      }
+    }
+    return @(Get-DeviceCredentialState -Targets $Targets)
+  }
+  throw 'The target interactive Credential Manager session is unavailable.'
+}
+
 function Get-GdidSourceModel {
   param([object]$Target)
 
@@ -2089,6 +2348,7 @@ function Get-GdidSourceModel {
   $localAppData = $localAppDataResult.Path
 
   return [pscustomobject]@{
+    Target = $Target
     ProfilePath = $Target.ProfilePath
     Errors = @($localAppDataResult.Error | Where-Object { $_ })
     Lids = @(
@@ -2112,6 +2372,8 @@ function Get-GdidSourceModel {
     )
     TokenPath = $identityRoot + '\Immersive\production\Token'
     NegativeCachePath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
+    CredentialAccessMode = Get-TargetCredentialAccessMode -Target $Target
+    CredentialTargets = @($script:DeviceCredentialTargets)
     CachePaths = @(
       [pscustomobject]@{
         Name = 'TokenBroker'
@@ -2290,6 +2552,7 @@ function Get-GdidInventory {
   $tokenKeys = New-Object System.Collections.Generic.List[object]
   $negativeCacheKeys = New-Object System.Collections.Generic.List[object]
   $cacheArtifacts = New-Object System.Collections.Generic.List[object]
+  $deviceCredentials = New-Object System.Collections.Generic.List[object]
   foreach ($modelError in $Model.Errors) {
     [void]$errors.Add($modelError)
   }
@@ -2417,6 +2680,25 @@ function Get-GdidInventory {
     }
   }
 
+  $credentialInspectionAvailable = $false
+  if ($Model.CredentialAccessMode -ne 'Unavailable') {
+    try {
+      foreach (
+        $credentialState in @(
+          Invoke-TargetDeviceCredentialOperation `
+            -Target $Model.Target `
+            -Targets $Model.CredentialTargets `
+            -Mode Inspect
+        )
+      ) {
+        [void]$deviceCredentials.Add($credentialState)
+      }
+      $credentialInspectionAvailable = $true
+    } catch {
+      [void]$errors.Add(('DeviceCredentials: {0}' -f $_.Exception.Message))
+    }
+  }
+
   $activeReal = @(
     $entries |
       Where-Object { $_.Category -eq 'Active' -and $_.IsReal } |
@@ -2438,6 +2720,8 @@ function Get-GdidInventory {
     TokenKeys = $tokenKeys.ToArray()
     NegativeCacheKeys = $negativeCacheKeys.ToArray()
     CacheArtifacts = $cacheArtifacts.ToArray()
+    CredentialInspectionAvailable = $credentialInspectionAvailable
+    DeviceCredentials = $deviceCredentials.ToArray()
     ActiveRealPuids = $activeReal
     ResidualRealPuids = $residualReal
     AllRealPuids = $allReal
@@ -2589,8 +2873,8 @@ function Set-FailClosedMintBarrier {
     -OperationName 'EnsureFailClosedMintServiceRule' `
     -Action {
       New-StagingMintServiceRule
-      if (-not (Test-StagingMintServiceRuleEnforced)) {
-        throw 'Staging wlidsvc deny is not fully enforced.'
+      if (-not (Test-MintServiceBarrierEnforced)) {
+        throw 'Neither the permanent nor staging wlidsvc deny is enforced.'
       }
     }
   $servicesStopped = Stop-AllGdidServices `
@@ -2784,6 +3068,25 @@ function Invoke-IdentityStoreChanges {
       })
   }
 
+  if ($Before.CredentialInspectionAvailable) {
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName 'ClearTargetSessionDeviceCredentials' `
+      -DryRun:$DryRun `
+      -Action {
+        $remaining = @(
+          Invoke-TargetDeviceCredentialOperation `
+            -Target $Model.Target `
+            -Targets $Model.CredentialTargets `
+            -Mode Delete |
+            Where-Object { $_.Present }
+        )
+        if ($remaining.Count -gt 0) {
+          throw 'One or more target-session device credentials remain.'
+        }
+      })
+  }
+
   foreach ($cacheKey in $Before.NegativeCacheKeys) {
     $matchesCaptured = $false
     foreach ($puid in $cacheKey.Puids) {
@@ -2902,6 +3205,13 @@ function Test-WipePostcondition {
   if ($capturedRemaining.Count -gt 0) {
     [void]$reasons.Add('A captured old PUID remains.')
   }
+  if (-not $Inventory.CredentialInspectionAvailable) {
+    [void]$reasons.Add('Target-user device credentials could not be inspected.')
+  } elseif (
+    @($Inventory.DeviceCredentials | Where-Object { $_.Present }).Count -gt 0
+  ) {
+    [void]$reasons.Add('An MSA device credential remains.')
+  }
 
   if ($Mode -eq 'Wipe') {
     if (
@@ -2989,6 +3299,20 @@ function Invoke-IdentityMutation {
       Results = @()
       Postcondition = $null
       Errors = @($model.Errors)
+    }
+  }
+  if ($model.CredentialAccessMode -eq 'Unavailable') {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 6
+      Message = 'The target Windows Credential Manager session is unavailable.'
+      CapturedCount = 0
+      Decoy = $null
+      Results = @()
+      Postcondition = $null
+      Errors = @(
+        'No direct or interactive-task credential context could be established; no mutation was attempted.'
+      )
     }
   }
   $sourceSafety = Test-GdidSourceModelSafety -Model $model
@@ -3241,6 +3565,7 @@ function Invoke-IdentityMutation {
     Decoy = $decoy
     Results = $results.ToArray()
     Postcondition = $postcondition
+    AfterInventory = $after
     Errors = @($errors | Where-Object { $_ })
   }
 }
@@ -3371,6 +3696,10 @@ function Get-DegdidStatus {
       Entries = @()
       Errors = @()
       CacheArtifacts = @()
+      PropertyValueNames = @()
+      TokenKeys = @()
+      CredentialInspectionAvailable = $false
+      DeviceCredentials = @()
       ActiveRealPuids = @()
       ResidualRealPuids = @()
       AllRealPuids = @()
@@ -3383,12 +3712,14 @@ function Get-DegdidStatus {
   )
   $blockHealthy = (
     $hosts.State -eq 'Valid' -and
-    $firewall.Health -eq 'Valid' -and
     $mintPath.Health -eq 'Valid'
   )
   $hasReal = $inventory.AllRealPuids.Count -gt 0
   $deviceTicketCount = @(
     $inventory.TokenKeys | Where-Object { $_.HasDeviceTicket }
+  ).Count
+  $deviceCredentialCount = @(
+    $inventory.DeviceCredentials | Where-Object { $_.Present }
   ).Count
   $unknownActiveIdentityCount = @(
     $inventory.Entries |
@@ -3403,7 +3734,9 @@ function Get-DegdidStatus {
   )
   $hasUnresolvedIdentity = (
     $deviceTicketCount -gt 0 -or
-    $unknownActiveIdentityCount -gt 0
+    $unknownActiveIdentityCount -gt 0 -or
+    $deviceCredentialCount -gt 0 -or
+    -not $inventory.CredentialInspectionAvailable
   )
   $hasError = (
     $hasInspectionError -or
@@ -3583,6 +3916,7 @@ function Get-DegdidStatus {
       IsAdministrator = $environment.IsAdministrator
       IsWindows11 = $environment.IsWindows11
       IsSupportedBuild = $environment.IsSupportedBuild
+      IsLabValidatedBuild = $environment.IsLabValidatedBuild
       Is64BitProcess = $environment.Is64BitProcess
       Unmanaged = $environment.Unmanaged
       ProductName = $environment.ProductName
@@ -3639,6 +3973,10 @@ function Get-DegdidStatus {
       RealShapedCount = @($activeEntries | Where-Object { $_.IsRealShaped }).Count
       UnknownIdentityCount = $unknownActiveIdentityCount
       DeviceTicketCount = $deviceTicketCount
+      DeviceCredentialCount = $deviceCredentialCount
+      DeviceCredentialInspectionAvailable = (
+        [bool]$inventory.CredentialInspectionAvailable
+      )
       Entries = $activeEntries
       Errors = $inventoryErrors
     }
@@ -3687,7 +4025,6 @@ function Write-DegdidStatusHuman {
   $blockActive = (
     $Report.Hosts.State -eq 'Valid' -and
     $Report.Hosts.Canonical -and
-    $Report.Firewall.Health -eq 'Valid' -and
     $Report.MintPath.Health -eq 'Valid'
   )
   $blockAbsent = (
@@ -3699,6 +4036,13 @@ function Write-DegdidStatusHuman {
   if ($blockActive) {
     Write-Output '  ACTIVE — Windows DeviceAdd is blocked.'
     Write-Output '  login.live.com: blocked on IPv4 and IPv6; TCP connection failed.'
+    if ($Report.Firewall.MintServiceRuleValid) {
+      Write-Output '  Supplemental wlidsvc firewall rule: enforced'
+    } elseif ($Report.Firewall.StagingRuleCount -gt 0) {
+      Write-Output '  Supplemental firewall: temporary mint-service rule present'
+    } else {
+      Write-Output '  Supplemental firewall: not required for this verified hosts/path state'
+    }
   } elseif ($blockAbsent) {
     Write-Output '  NOT CONFIGURED — Windows can contact Microsoft and mint another GDID.'
     Write-Output '  Hosts block: absent'
@@ -3715,7 +4059,9 @@ function Write-DegdidStatusHuman {
   if ($Report.Gdids.Count -eq 0) {
     if (
       $Report.ActiveStoreInventory.DeviceTicketCount -gt 0 -or
-      $Report.ActiveStoreInventory.UnknownIdentityCount -gt 0
+      $Report.ActiveStoreInventory.UnknownIdentityCount -gt 0 -or
+      $Report.ActiveStoreInventory.DeviceCredentialCount -gt 0 -or
+      -not $Report.ActiveStoreInventory.DeviceCredentialInspectionAvailable
     ) {
       Write-Output '  No readable GDID was found, but opaque identity state remains.'
     } else {
@@ -3751,6 +4097,15 @@ function Write-DegdidStatusHuman {
       '  Opaque device tickets still present: {0}' -f
       $Report.ActiveStoreInventory.DeviceTicketCount
     )
+  }
+  if ($Report.ActiveStoreInventory.DeviceCredentialCount -gt 0) {
+    Write-Output (
+      '  MSA device credentials that can restore device identity: {0}' -f
+      $Report.ActiveStoreInventory.DeviceCredentialCount
+    )
+  }
+  if (-not $Report.ActiveStoreInventory.DeviceCredentialInspectionAvailable) {
+    Write-Output '  MSA device credentials could not be inspected for the target user.'
   }
 
   Write-Output ''
@@ -3811,62 +4166,32 @@ function Invoke-DnsFlush {
 function Invoke-BlockConfiguration {
   param([switch]$DryRun)
 
-  if (-not $DryRun) {
-    try {
-      # Establish the mint-service deny before the hosts rewrite so cached
-      # addresses cannot create an exposure window during block refresh.
-      New-StagingMintServiceRule
-      if (-not (Test-StagingMintServiceRuleEnforced)) {
-        throw 'Staging wlidsvc rule is not fully enforced in ActiveStore.'
-      }
-    } catch {
-      return [pscustomobject]@{
-        Success = $false
-        ExitCode = 3
-        Message = 'Could not establish the fail-closed staging service rule: {0}' -f $_.Exception.Message
-        Hosts = $null
-        Firewall = $null
-        Gate = $null
-      }
-    }
-  }
-
   try {
     $hostsResult = Invoke-HostsDocumentChange -Mode Block -DryRun:$DryRun
   } catch {
     return [pscustomobject]@{
       Success = $false
       ExitCode = 4
-      Message = $(if ($DryRun) {
-        $_.Exception.Message
-      } else {
-        '{0} The fail-closed staging wlidsvc rule remains active.' -f $_.Exception.Message
-      })
+      Message = $_.Exception.Message
       Hosts = $null
       Firewall = $null
       Gate = $null
     }
   }
 
-  $firewallResult = Set-FirewallBlock `
-    -DryRun:$DryRun `
-    -UseExistingStaging:(-not $DryRun)
+  $warnings = New-Object System.Collections.Generic.List[string]
+  $firewallResult = Set-FirewallBlock -DryRun:$DryRun
   if (-not $firewallResult.Success) {
-    return [pscustomobject]@{
-      Success = $false
-      ExitCode = 3
-      Message = $firewallResult.Message
-      Hosts = $hostsResult
-      Firewall = $firewallResult
-      Gate = $null
-    }
+    [void]$warnings.Add(
+      'Supplemental firewall was not refreshed: {0}' -f $firewallResult.Message
+    )
   }
 
   if ($DryRun) {
     return [pscustomobject]@{
       Success = $true
       ExitCode = 0
-      Message = 'DryRun planned hosts and firewall refresh; current state was not changed.'
+      Message = 'DryRun planned the required hosts refresh and optional firewall refresh; current state was not changed.'
       Hosts = $hostsResult
       Firewall = $firewallResult
       Gate = Get-ProtectionGate
@@ -3876,14 +4201,7 @@ function Invoke-BlockConfiguration {
   try {
     Invoke-DnsFlush
   } catch {
-    return [pscustomobject]@{
-      Success = $false
-      ExitCode = 3
-      Message = $_.Exception.Message
-      Hosts = $hostsResult
-      Firewall = $firewallResult
-      Gate = $null
-    }
+    [void]$warnings.Add(('DNS flush failed: {0}' -f $_.Exception.Message))
   }
 
   $gate = Get-ProtectionGate
@@ -3891,9 +4209,14 @@ function Invoke-BlockConfiguration {
     Success = $gate.Healthy
     ExitCode = $(if ($gate.Healthy) { 0 } else { 3 })
     Message = $(if ($gate.Healthy) {
-      'Hosts, dynamic-keyword firewall, and mint path independently verified.'
+      $suffix = $(if ($warnings.Count -gt 0) {
+        ' Warning: {0}' -f ($warnings -join ' ')
+      } else {
+        ''
+      })
+      'Canonical hosts and the actual DeviceAdd path verified.{0}' -f $suffix
     } else {
-      'Registration block verification failed.'
+      'DeviceAdd path verification failed. {0}' -f ($warnings -join ' ')
     })
     Hosts = $hostsResult
     Firewall = $firewallResult
@@ -3987,14 +4310,43 @@ function Write-MutationResult {
     Write-Output (
       'OperationFailure {0}: {1}' -f
       $failure.Name,
-      (Format-StatusErrorText -Text $failure.Error)
+      (Format-StatusErrorText -Text $failure.Error -Show)
     )
   }
   foreach ($errorText in $Result.Errors) {
     Write-Output (
       'Error: {0}' -f
-      (Format-StatusErrorText -Text $errorText)
+      (Format-StatusErrorText -Text $errorText -Show)
     )
+  }
+  if (-not $Result.Success -and $null -ne $Result.AfterInventory) {
+    foreach ($puid in @($Result.AfterInventory.AllRealPuids)) {
+      $matching = @(
+        $Result.AfterInventory.Entries |
+          Where-Object { $_.RawIdentifier -ieq $puid }
+      )
+      $locations = @(
+        $matching |
+          ForEach-Object { Get-GdidLocationLabel -Entry $_ } |
+          Sort-Object -Unique
+      )
+      Write-Output (
+        'Remaining GDID {0} ({1}) in: {2}' -f
+        (ConvertTo-Gdid $puid),
+        $puid,
+        ($locations -join ', ')
+      )
+    }
+    $remainingCredentials = @(
+      $Result.AfterInventory.DeviceCredentials |
+        Where-Object { $_.Present }
+    )
+    if ($remainingCredentials.Count -gt 0) {
+      Write-Output (
+        'Remaining MSA device credentials: {0}' -f
+        (($remainingCredentials | ForEach-Object { $_.Target }) -join ', ')
+      )
+    }
   }
 }
 
