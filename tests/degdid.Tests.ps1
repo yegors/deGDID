@@ -587,6 +587,8 @@ Describe 'degdid fail-closed service sequencing' {
       CachePaths = @()
       CredentialAccessMode = 'DirectCurrentSession'
       CredentialTargets = @()
+      SystemCredentialAccessSupported = $true
+      SystemCredentialTargets = @()
     }
     $script:emptyInventory = [pscustomobject]@{
       Errors = @()
@@ -689,6 +691,8 @@ Describe 'degdid MSA device credential cleanup' {
       TokenKeys = @()
       NegativeCacheKeys = @()
       CredentialInspectionAvailable = $true
+      TargetCredentialInspectionAvailable = $true
+      SystemCredentialInspectionAvailable = $true
       DeviceCredentials = @(
         [pscustomobject]@{
           Target = 'MicrosoftAccount:target=SSO_POP_Device'
@@ -708,8 +712,24 @@ Describe 'degdid MSA device credential cleanup' {
         'MicrosoftAccount:target=SSO_POP_Device',
         'WindowsLive:target=virtualapp/didlogical'
       )
+      SystemCredentialTargets = @(
+        'MicrosoftAccount:target=SSO_POP_Device',
+        'WindowsLive:target=virtualapp/didlogical'
+      )
     }
     Mock Invoke-TargetDeviceCredentialOperation {
+      @(
+        [pscustomobject]@{
+          Target = 'MicrosoftAccount:target=SSO_POP_Device'
+          Present = $false
+        },
+        [pscustomobject]@{
+          Target = 'WindowsLive:target=virtualapp/didlogical'
+          Present = $false
+        }
+      )
+    }
+    Mock Invoke-SystemDeviceCredentialOperation {
       @(
         [pscustomobject]@{
           Target = 'MicrosoftAccount:target=SSO_POP_Device'
@@ -731,6 +751,7 @@ Describe 'degdid MSA device credential cleanup' {
       -Results $results
 
     Assert-MockCalled Invoke-TargetDeviceCredentialOperation 1 -Scope It
+    Assert-MockCalled Invoke-SystemDeviceCredentialOperation 1 -Scope It
     @($results | Where-Object { -not $_.Success }).Count | Should Be 0
   }
 }

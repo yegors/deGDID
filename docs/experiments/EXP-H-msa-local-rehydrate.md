@@ -1,7 +1,7 @@
 # EXP-H - MSA profile local LID rehydrate
 
 Date: 2026-07-12  
-Evidence: **user-provided field run; bounded diagnosis; remediation rerun pending**
+Evidence: **user-provided field run; target-user remediation passed; delayed machine-hive remediation pending rerun**
 
 ## Environment
 
@@ -81,4 +81,19 @@ the permanent or staging deny before replacement, removes the permanent rule, th
 waits for and requires the staging deny to become enforced before continuing. A
 stale owned staging rule no longer makes otherwise valid protection report malformed.
 
-The MSA device-credential remediation still needs its first actual execution.
+## Third field attempt — target-user remediation passed
+
+After relaxing the duplicate-rule handoff, Protect completed:
+
+- block/path verification passed;
+- all 32 operations succeeded;
+- target-user LID and both MSA device credentials were absent; and
+- immediate verdict was `ProtectedNoRealGdid`.
+
+About 20 minutes later, the original **machine** PUID returned in SYSTEM and
+`.DEFAULT` LID while the target user and MSA device credentials stayed clear. This
+separates the two causes: target-user MSA rehydrate was fixed; machine identity had
+the same delayed machine-hive/SYSTEM-credential gaps found independently in EXP-G.
+
+The current script now applies the EXP-G three-hive and SYSTEM Credential Manager
+cleanup to this case as well. A final MSA-machine rerun/reboot remains pending.

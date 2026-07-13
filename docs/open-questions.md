@@ -18,10 +18,11 @@ the exact Stokes URL-association sensor are **not** release gates.
 - [x] Require canonical dual-stack hosts plus actual DeviceAdd path verification.
   Dynamic-keyword and `wlidsvc` firewall layers are refreshed/reported when policy
   permits but no single firewall topology is mandatory.
-- [ ] Re-run the long soak with the three-hive Property/Token cleanup. EXP-G
-  initially passed immediate Protect, two reboots, and service/task triggers, but a
-  machine PUID returned locally after roughly seven hours from SYSTEM/`.DEFAULT`
-  Property and Token stores. Network DeviceAdd attempts remained failed.
+- [x] Re-run the delayed-rehydrate soak with three-hive plus SYSTEM Credential
+  Manager cleanup. EXP-G first exposed SYSTEM/`.DEFAULT` Property/Token stores,
+  then SYSTEM `didlogical`. The final revision remained `ProtectedNoRealGdid` at
+  the accepted eight-hour threshold, beyond both prior failure windows. A literal
+  24-hour run is optional and is not claimed.
 - [x] Run `-Protect` against the real contaminated state shape: target-user LID,
   Property, Token/Tickets, machine residual cache, and related files. Interim
   `EXP-G` cleared that state and held through two reboots plus service/task

@@ -1,6 +1,6 @@
 # EXP-G - Pending closure / hardening matrix
 
-Status: **FAILED AT ~7 HOURS — machine-hive Property/Token rehydrate found; expanded three-hive fix pending rerun**
+Status: **PASS AT 8-HOUR DELAYED-REHYDRATE THRESHOLD — SYSTEM credential cleanup held beyond both prior failure windows**
 
 This began as an experiment design. The bounded interim observations below are now recorded; unexecuted rows remain pending and no longer-duration outcome is implied.
 
@@ -110,8 +110,17 @@ server mint under the block. The current rewrite inventoried/cleared Property an
 Token only in the target-user hive. The source model now covers target-user,
 `.DEFAULT`, and SYSTEM LID + Property + Token/Ticket stores symmetrically.
 
-The failed state was checkpointed before cleanup. A fresh Protect/soak rerun is
-required; the prior immediate and reboot passes remain useful but do not satisfy G2.
+The first three-hive rerun again passed immediately but the same machine PUID
+returned after eight hours. At that point only SYSTEM/`.DEFAULT` LID was visible;
+Property and Token stores remained empty. LiveId SOAP attempts still failed with
+`0x80048051`. A temporary SYSTEM-context credential audit found
+`WindowsLive:target=virtualapp/didlogical` in the SYSTEM Credential Manager vault.
+The wipe now inspects/deletes the two device-credential targets in both the target
+interactive session and the SYSTEM session.
+
+The failed state was preserved before cleanup. A fresh Protect/soak rerun with
+SYSTEM credential cleanup is required; the prior immediate and reboot passes remain
+useful but do not satisfy G2.
 
 ## Three-hive remediation rerun
 
@@ -130,11 +139,44 @@ Immediate rerun result:
 An eight-hour threshold check is armed to exceed the prior roughly seven-hour
 failure point. This immediate result does not yet close G2.
 
+That threshold check failed with the same machine PUID in SYSTEM/`.DEFAULT` LID
+while Property and Token stores remained empty. A SYSTEM-context Credential Manager
+audit found `WindowsLive:target=virtualapp/didlogical`. LiveId attempts continued to
+fail with `0x80048051`.
+
+The next revision added target-user **and SYSTEM-session** device-credential
+inspection/deletion. Immediate rerun:
+
+- Protect returned `0`;
+- all 39 operations succeeded;
+- all three hives were clear;
+- target-user and SYSTEM device-credential counts were `0`; and
+- verdict was `ProtectedNoRealGdid`.
+
+An eight-hour threshold check was armed to exceed both earlier failure windows.
+
+## Final eight-hour threshold result — PASS
+
+At eight hours after the SYSTEM-credential revision:
+
+- verdict remained `ProtectedNoRealGdid`;
+- target-user, `.DEFAULT`, and SYSTEM active-store counts were `0`;
+- residual PUID count was `0`;
+- DeviceTicket count was `0`;
+- target-user and SYSTEM device-credential count was `0`;
+- TokenBroker and ConnectedDevicesPlatform cache counts were `0`;
+- canonical A/AAAA sink responses remained active; and
+- TCP to `login.live.com` remained blocked.
+
+This exceeds both earlier delayed-failure windows (roughly seven and eight hours).
+The project accepts this eight-hour targeted threshold as the bounded G2 closure
+window; a literal 24-hour run remains optional rather than claimed.
+
 ## Closure rule
 
-To close the validated 25H2/build-26200 line, rerun canonical Protect with the
-three-hive source model, restart G2, run the remaining G3 transitions, and finish
-the disposable-guest G7/G8 matrix.
+G2 is closed for the accepted eight-hour bounded window. Remaining discrete matrix
+work is G3 session/power transitions and a disposable-guest G8 confirmation; G7 has
+multiple real fail-closed defects plus unit coverage but not every synthetic branch.
 G6 is optional expansion to 24H2. G9 is optional, but H5 remains partial until a
 controlled pending CU is exercised. G10 is optional research because the public
 tool already clears the full conservative bundle; Immersive Property remains a

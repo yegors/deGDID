@@ -113,13 +113,13 @@ The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from s
 
 Implementation completion and end-to-end lab validation are separate states. The first is complete; the second is not.
 
-`EXP-G` now records a successful exact-rewrite Protect run, two reboot checks, and
-service/task triggers on the 25H2 guest, plus three naturally encountered defects
-that failed closed and were fixed. The real target-user and residual contamination
-shape was exercised. EXP-H then exposed an MSA-specific local user-LID rehydrate
-path; targeted device-credential cleanup is implemented but needs a rerun. The
-24-hour window, clean never-mint clone, and remaining transition/recovery matrix
-are also open. MSA UI usability remains separate compatibility work.
+`EXP-G` exposed two delayed local machine rehydrate layers—machine-hive
+Property/Token state and SYSTEM `didlogical`—then passed the accepted eight-hour
+threshold after both were cleared. EXP-H independently confirmed the target-user
+MSA credential layer and later matched the same machine gap. Remaining work is the
+clean never-mint clone, discrete transition/recovery cases, and final MSA-machine
+reboot/persistence confirmation. MSA UI usability remains separate compatibility
+work.
 
 ## Phase 0 - Foundations
 

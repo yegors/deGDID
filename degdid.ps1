@@ -2194,18 +2194,21 @@ function Get-TargetCredentialAccessMode {
   return 'Unavailable'
 }
 
-function Invoke-InteractiveCredentialTask {
+function Invoke-CredentialTask {
   param(
-    [object]$Target,
+    [string]$UserId,
+    [ValidateSet('Interactive', 'ServiceAccount')]
+    [string]$LogonType,
+    [ValidateSet('Limited', 'Highest')]
+    [string]$RunLevel,
+    [string]$ResultDirectory,
     [string[]]$Targets,
     [ValidateSet('Inspect', 'Delete')]
     [string]$Mode
   )
 
   $taskName = 'degdid-credential-{0}' -f [Guid]::NewGuid().ToString('N')
-  $resultPath = Join-Path (
-    Join-Path $Target.ProfilePath 'AppData\Local\Temp'
-  ) ('{0}.json' -f $taskName)
+  $resultPath = Join-Path $ResultDirectory ('{0}.json' -f $taskName)
   if (Test-Path -LiteralPath $resultPath) {
     Remove-Item -LiteralPath $resultPath -Force -ErrorAction Stop
   }
@@ -2265,9 +2268,9 @@ if (`$delete) {
     -Execute $powershell `
     -Argument ('-NoProfile -NonInteractive -EncodedCommand {0}' -f $encoded)
   $principal = New-ScheduledTaskPrincipal `
-    -UserId $Target.Sid `
-    -LogonType Interactive `
-    -RunLevel Limited
+    -UserId $UserId `
+    -LogonType $LogonType `
+    -RunLevel $RunLevel
 
   try {
     Register-ScheduledTask `
@@ -2286,7 +2289,7 @@ if (`$delete) {
     }
     if (-not (Test-Path -LiteralPath $resultPath)) {
       $info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
-      throw 'Interactive credential helper produced no result. LastTaskResult={0}' -f
+      throw 'Credential helper produced no result. LastTaskResult={0}' -f
         $(if ($info) { $info.LastTaskResult } else { 'unknown' })
     }
     $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop |
@@ -2318,8 +2321,11 @@ function Invoke-TargetDeviceCredentialOperation {
   $accessMode = Get-TargetCredentialAccessMode -Target $Target
   if ($accessMode -eq 'InteractiveTask') {
     return @(
-      Invoke-InteractiveCredentialTask `
-        -Target $Target `
+      Invoke-CredentialTask `
+        -UserId $Target.Sid `
+        -LogonType Interactive `
+        -RunLevel Limited `
+        -ResultDirectory (Join-Path $Target.ProfilePath 'AppData\Local\Temp') `
         -Targets $Targets `
         -Mode $Mode
     )
@@ -2338,6 +2344,27 @@ function Invoke-TargetDeviceCredentialOperation {
     return @(Get-DeviceCredentialState -Targets $Targets)
   }
   throw 'The target interactive Credential Manager session is unavailable.'
+}
+
+function Invoke-SystemDeviceCredentialOperation {
+  param(
+    [string[]]$Targets,
+    [ValidateSet('Inspect', 'Delete')]
+    [string]$Mode
+  )
+
+  if (-not (Test-IsAdministrator)) {
+    throw 'SYSTEM Credential Manager inspection requires elevation.'
+  }
+  return @(
+    Invoke-CredentialTask `
+      -UserId 'SYSTEM' `
+      -LogonType ServiceAccount `
+      -RunLevel Highest `
+      -ResultDirectory $env:ProgramData `
+      -Targets $Targets `
+      -Mode $Mode
+  )
 }
 
 function Get-GdidSourceModel {
@@ -2411,6 +2438,8 @@ function Get-GdidSourceModel {
     NegativeCachePath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
     CredentialAccessMode = Get-TargetCredentialAccessMode -Target $Target
     CredentialTargets = @($script:DeviceCredentialTargets)
+    SystemCredentialAccessSupported = Test-IsAdministrator
+    SystemCredentialTargets = @($script:DeviceCredentialTargets)
     CachePaths = @(
       [pscustomobject]@{
         Name = 'TokenBroker'
@@ -2749,7 +2778,8 @@ function Get-GdidInventory {
     }
   }
 
-  $credentialInspectionAvailable = $false
+  $targetCredentialInspectionAvailable = $false
+  $systemCredentialInspectionAvailable = $false
   if ($Model.CredentialAccessMode -ne 'Unavailable') {
     try {
       foreach (
@@ -2760,11 +2790,35 @@ function Get-GdidInventory {
             -Mode Inspect
         )
       ) {
-        [void]$deviceCredentials.Add($credentialState)
+        [void]$deviceCredentials.Add([pscustomobject]@{
+          Scope = 'TargetUser'
+          Target = $credentialState.Target
+          Present = [bool]$credentialState.Present
+        })
       }
-      $credentialInspectionAvailable = $true
+      $targetCredentialInspectionAvailable = $true
     } catch {
-      [void]$errors.Add(('DeviceCredentials: {0}' -f $_.Exception.Message))
+      [void]$errors.Add(('TargetUserDeviceCredentials: {0}' -f $_.Exception.Message))
+    }
+  }
+  if ($Model.SystemCredentialAccessSupported) {
+    try {
+      foreach (
+        $credentialState in @(
+          Invoke-SystemDeviceCredentialOperation `
+            -Targets $Model.SystemCredentialTargets `
+            -Mode Inspect
+        )
+      ) {
+        [void]$deviceCredentials.Add([pscustomobject]@{
+          Scope = 'SYSTEM'
+          Target = $credentialState.Target
+          Present = [bool]$credentialState.Present
+        })
+      }
+      $systemCredentialInspectionAvailable = $true
+    } catch {
+      [void]$errors.Add(('SystemDeviceCredentials: {0}' -f $_.Exception.Message))
     }
   }
 
@@ -2789,7 +2843,12 @@ function Get-GdidInventory {
     TokenKeys = $tokenKeys.ToArray()
     NegativeCacheKeys = $negativeCacheKeys.ToArray()
     CacheArtifacts = $cacheArtifacts.ToArray()
-    CredentialInspectionAvailable = $credentialInspectionAvailable
+    CredentialInspectionAvailable = (
+      $targetCredentialInspectionAvailable -and
+      $systemCredentialInspectionAvailable
+    )
+    TargetCredentialInspectionAvailable = $targetCredentialInspectionAvailable
+    SystemCredentialInspectionAvailable = $systemCredentialInspectionAvailable
     DeviceCredentials = $deviceCredentials.ToArray()
     ActiveRealPuids = $activeReal
     ResidualRealPuids = $residualReal
@@ -3143,7 +3202,7 @@ function Invoke-IdentityStoreChanges {
       })
   }
 
-  if ($Before.CredentialInspectionAvailable) {
+  if ($Before.TargetCredentialInspectionAvailable) {
     [void](Add-OperationResult `
       -Results $Results `
       -OperationName 'ClearTargetSessionDeviceCredentials' `
@@ -3158,6 +3217,23 @@ function Invoke-IdentityStoreChanges {
         )
         if ($remaining.Count -gt 0) {
           throw 'One or more target-session device credentials remain.'
+        }
+      })
+  }
+  if ($Before.SystemCredentialInspectionAvailable) {
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName 'ClearSystemSessionDeviceCredentials' `
+      -DryRun:$DryRun `
+      -Action {
+        $remaining = @(
+          Invoke-SystemDeviceCredentialOperation `
+            -Targets $Model.SystemCredentialTargets `
+            -Mode Delete |
+            Where-Object { $_.Present }
+        )
+        if ($remaining.Count -gt 0) {
+          throw 'One or more SYSTEM-session device credentials remain.'
         }
       })
   }
@@ -3388,6 +3464,18 @@ function Invoke-IdentityMutation {
       Errors = @(
         'No direct or interactive-task credential context could be established; no mutation was attempted.'
       )
+    }
+  }
+  if (-not $model.SystemCredentialAccessSupported) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 1
+      Message = 'SYSTEM Credential Manager inspection requires elevation.'
+      CapturedCount = 0
+      Decoy = $null
+      Results = @()
+      Postcondition = $null
+      Errors = @('No mutation was attempted.')
     }
   }
   $sourceSafety = Test-GdidSourceModelSafety -Model $model
@@ -4180,7 +4268,7 @@ function Write-DegdidStatusHuman {
     )
   }
   if (-not $Report.ActiveStoreInventory.DeviceCredentialInspectionAvailable) {
-    Write-Output '  MSA device credentials could not be inspected for the target user.'
+    Write-Output '  Not every target-user/SYSTEM device credential vault could be inspected.'
   }
 
   Write-Output ''

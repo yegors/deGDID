@@ -157,6 +157,7 @@ The known source model includes:
 - target-user, `.DEFAULT`, and SYSTEM Token `DeviceId` and `DeviceTicket` fields;
 - target-user Credential Manager device entries `SSO_POP_Device` and
   WindowsLive `didlogical`;
+- SYSTEM Credential Manager device entries, including WindowsLive `didlogical`;
 - machine IdentityCRL NegativeCache keys whose names embed a captured PUID;
 - target-user TokenBroker cache contents; and
 - target-user ConnectedDevicesPlatform cache contents.
@@ -164,7 +165,8 @@ The known source model includes:
 Because UAC elevation has a different logon-session credential namespace, the
 script does not trust SID equality alone. It uses a short-lived limited scheduled
 task in the target interactive session to inspect/delete only those two device
-credentials, then removes the helper task and result file.
+credentials. A separate short-lived SYSTEM task handles the machine credential
+vault. Both helpers and result files are removed immediately.
 
 Before deleting files, the script verifies that each cache is under the resolved target profile and contains no reparse points. It inventories before and after quiescing identity services, captures every real-shaped PUID it can read, performs each operation with explicit accounting, restores the original service state, waits 12 seconds with eligible identity services started for settle, and re-inventories.
 
@@ -285,15 +287,16 @@ Because Decoy is `0018`-shaped, it can correctly yield `RealGdidPresent`. That v
 | EXP-D | **Partial H5** | Zero-pending WU scan, Defender update, successful prior blocked-period history, and no mint; no controlled pending CU installation during D. |
 | EXP-E | **Partial/inferred H6** | Desktop, WU scan, Defender, and blocked LiveId path observed; most Store/Xbox/Phone Link behavior inferred, not UI-exercised. |
 | EXP-F | Nuanced | No replacement/remint during approximately five-to-six-minute unblocked trials on the exercised image; no long-window conclusion. |
-| EXP-H | Observed MSA field failure | Same old user LID rehydrated locally under healthy blocks after all earlier bundle operations succeeded; targeted device-credential cleanup added, rerun pending. |
+| EXP-G | Delayed-rehydrate threshold PASS | Two machine-local gaps were found and fixed; final three-hive + target/SYSTEM credential cleanup stayed `ProtectedNoRealGdid` for the accepted eight-hour window. |
+| EXP-H | Target-user remediation passed; persistence pending | MSA user credential cleanup passed immediately; later machine return matched EXP-G gaps now covered by the current script. |
 
 ## Validation still pending
 
-The first exact-rewrite Protect run and two reboot checks now pass on the supported
-25H2 guest (`EXP-G` interim). Remaining closure work:
+EXP-G passed the accepted eight-hour delayed-rehydrate threshold on the supported
+25H2 guest. Remaining closure work:
 
-- 24-hour online post-Protect window and remaining session/service/task transitions
-- EXP-H rerun proving the MSA device-credential cleanup prevents the old user LID from returning
+- remaining session/power and recovery-Unblock transitions
+- final EXP-H MSA-machine rerun/reboot using all three hive and credential scopes
 - all five Status verdicts against controlled states
 - remaining injected fail-closed transitions and recovery-Unblock matrix
 - FQDN hydration behavior beyond the observed unhydrated hosts-sink configuration
