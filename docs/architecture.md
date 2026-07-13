@@ -1,6 +1,6 @@
 # GDID Architecture — Generation, Lifecycle, Correlation
 
-Last updated: 2026-07-11  
+Last updated: 2026-07-13
 Confidence tags: `[COURT]` `[MSDOC]` `[STATIC]` `[LAB]` `[CITED-RE]` `[OBSERVED]` `[ASSESSED]`; see `glossary.md`.
 
 ## Executive model
@@ -29,7 +29,7 @@ GDID is **not** a local hash of your GPU serial. It is a **server-assigned 64-bi
 ```
 
 **Tool completion boundary:** this architecture map is deliberately broader than the
-release contract. For a supported unmanaged, single-user Windows 11 system, tool
+release contract. For a supported unmanaged, single-user Windows system, tool
 completion means continuously blocking the DeviceAdd mint path and removing known
 active real Device PUID state. Solving general Windows telemetry or identifying the
 exact Stokes URL-association sensor remains open research, not a release gate. Wipe is

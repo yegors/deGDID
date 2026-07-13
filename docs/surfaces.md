@@ -1,12 +1,12 @@
 # GDID Threat / Attack Surface Map
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 Inventory of places GDID (or its Device PUID twin) is stored, computed against, emitted, or correlated. Companion to `architecture.md`.
 
 The inventory is broader than the tool's release claim. The GDID-only completion
 boundary is continuous DeviceAdd blocking plus removal of known active real PUID
-state on a supported unmanaged, single-user Windows 11 system. General telemetry
+state on a supported unmanaged, single-user Windows system. General telemetry
 suppression and the exact Stokes URL sensor remain research.
 
 ---
@@ -129,8 +129,9 @@ The current script integrates three defense-in-depth layers:
 `-Protect` verifies the hosts state, firewall objects, and the
 `login.live.com` mint path before running the canonical wipe. This describes the
 current implementation, not a completed longitudinal result: 24-hour/multi-reboot
-and MSA-contaminated 25H2 validation remain open. Windows 11 24H2 is outside the
-advertised mutation scope until separately validated.
+and MSA-contaminated 25H2 validation remain open. Windows 10 22H2/build 19045 and
+Windows 11 builds other than the lab-validated 25H2/build-26200 line are accepted
+generically but require separate closure matrices.
 
 ### 3.2 Reporting / delivery (known or likely carriers)
 

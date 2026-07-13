@@ -1,10 +1,10 @@
 ﻿# Lab Playbook - Exact-Revision VM Validation
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 ## Goal
 
-Validate the current `degdid.ps1` implementation on disposable Windows 11 virtual machines and record bounded, reproducible evidence for:
+Validate the current `degdid.ps1` implementation on disposable Windows virtual machines and record bounded, reproducible evidence for:
 
 - prevention of first GDID mint;
 - continuous DeviceAdd blocking;
@@ -48,7 +48,7 @@ Do not convert any of these windows into "permanent" or "indefinite."
 ### 1.1 Host and hypervisor
 
 - Hyper-V, VMware, or VirtualBox with snapshots/checkpoints.
-- Generation 2 Windows 11 guest where applicable.
+- Generation 2 Windows 10 or Windows 11 guest where applicable.
 - NAT or a controlled gateway that can be disconnected before OOBE.
 - At least 40 GB free if a feature-update experiment is planned.
 - A private, offline-copyable copy of this repository.
@@ -59,7 +59,8 @@ Do not convert any of these windows into "permanent" or "indefinite."
 
 The positive-path guest must match the script's mutation contract:
 
-- Windows 11 25H2 build 26200 for the advertised positive path; use separate research clones for other builds;
+- Windows 10 22H2 build 19045, or Windows 11 build 22000 or newer;
+- Windows 11 25H2 build 26200 remains the only lab-validated line; use a separate Windows 10 clone for its pending compatibility matrix;
 - not domain joined;
 - not Entra joined, registered, enterprise joined, or workplace joined;
 - not MDM enrolled;

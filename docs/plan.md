@@ -1,13 +1,13 @@
 ﻿# degdid - High-Level Plan
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 ## Purpose
 
 The project has two related tracks:
 
 1. **Research:** map the GDID mint, local persistence, registration, reporting, and correlation pipeline with explicit evidence tags.
-2. **Hardening:** provide a narrow, auditable completion gate that removes real server-issued GDID state from known local stores and continuously blocks DeviceAdd on a supported Windows 11 target.
+2. **Hardening:** provide a narrow, auditable completion gate that removes real server-issued GDID state from known local stores and continuously blocks DeviceAdd on a supported Windows target.
 
 The research track is intentionally broader than the shipped tool. `degdid.ps1` does not claim to suppress general Windows telemetry or the unidentified channel behind the court-reported GDID-to-URL/time/IP association.
 
@@ -49,7 +49,7 @@ The research track is intentionally broader than the shipped tool. `degdid.ps1` 
 
 `-Block`, `-Wipe`, `-Decoy`, and `-Protect` require:
 
-- Windows 11 build 22000 or newer; warn outside the lab-validated 25H2 build 26200 line
+- Windows 10 22H2 build 19045, or Windows 11 build 22000 or newer; warn outside the lab-validated Windows 11 25H2 build 26200 line
 - no domain join
 - no Entra join, registration, enterprise join, or workplace join
 - no detected MDM enrollment
@@ -102,6 +102,7 @@ The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from s
 ### Release validation
 
 - [ ] Run the exact current rewrite end to end on a supported clean Windows 11 guest
+- [ ] Run the Windows 10 22H2/build-19045 compatibility and refusal matrix
 - [ ] Run the exact current rewrite on a guest contaminated in machine and target-user stores
 - [ ] Re-run EXP-H on the MSA-connected profile after targeted device-credential cleanup
 - [ ] Exercise every Status verdict against controlled state
@@ -193,7 +194,7 @@ The preferred contaminated path is `-Protect`, which means continuous block plus
 
 Run from disposable snapshots and record exact timestamps:
 
-1. **Eligibility matrix:** supported local single-loaded-target guest; then domain, Entra, MDM, multiple-loaded-profile, no-target, and unloaded-hive refusal cases. Dormant profile artifacts must warn without causing refusal.
+1. **Eligibility matrix:** supported local single-loaded-target guest; then domain, Entra, MDM, multiple-loaded-profile, no-target, and unloaded-hive refusal cases. Dormant profile artifacts must warn without causing refusal. Repeat the positive path on Windows 10 22H2/build 19045 before promoting it from generic support to lab-validated support.
 2. **Block matrix:** absent, valid, stale paired, malformed, and duplicate hosts regions; missing/invalid keyword objects; missing FQDN or `wlidsvc` rule.
 3. **Status matrix:** force and capture all five exact verdicts with default redaction and `-Json`; inspect full identifiers only in private output.
 4. **Protect from contamination:** seed or naturally mint target-user and machine-hive state, run canonical Protect, reboot twice, and inspect immediately, at 5 minutes, 30 minutes, and 60 minutes online. Report the actual completed window; do not extrapolate beyond it.
@@ -225,10 +226,11 @@ Optional lower-priority work:
 ## Near-term actions
 
 1. Validate the exact current rewrite end to end on a supported VM.
-2. Run the controlled pending cumulative-update test.
-3. Complete the UI compatibility matrix.
-4. Run direct H7 wipe-then-unblock validation.
-5. Publish only claims supported by those recorded windows.
+2. Run the Windows 10 22H2/build-19045 closure matrix.
+3. Run the controlled pending cumulative-update test.
+4. Complete the UI compatibility matrix.
+5. Run direct H7 wipe-then-unblock validation.
+6. Publish only claims supported by those recorded windows.
 
 ## Document index
 

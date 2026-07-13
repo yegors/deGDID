@@ -1,6 +1,6 @@
 ﻿# Countermeasures - Implemented Gate and Evidence
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 Status: the hardened control path is implemented in root `degdid.ps1`. Historical Windows 11 25H2 build 26200 experiments support parts of the design, but the exact current rewrite has not yet completed an end-to-end guest validation pass.
 
@@ -24,7 +24,7 @@ This is a **GDID-only completion gate**. It does not claim to:
 
 Mutating actions other than Unblock require all of the following:
 
-- Windows 11 build 22000 or newer; 25H2 build 26200 is the lab-validated line and other builds warn;
+- Windows 10 22H2 build 19045, or Windows 11 build 22000 or newer; Windows 11 25H2 build 26200 is the only lab-validated line and other supported builds warn;
 - unmanaged: no domain join, Entra join/registration/workplace join, or MDM enrollment;
 - exactly one loaded target human-profile hive; dormant profile artifacts warn but do not refuse;
 - an active interactive user, or an authenticated session that maps to the sole loaded profile;
@@ -38,7 +38,7 @@ systems and returns an explicit verdict. `-Unblock` deliberately bypasses the
 target/profile preflight so recovery remains available after topology or management
 state changes.
 
-No compatibility claim in this document applies to domain, Entra, MDM, or simultaneous multi-loaded-profile mutation because the tool does not perform it.
+No compatibility claim in this document applies to domain, Entra, MDM, or simultaneous multi-loaded-profile mutation because the tool does not perform it. Windows 10 22H2/build 19045 is accepted by the generic mutation contract, but its end-to-end compatibility matrix remains pending.
 
 ## Strategy overview
 

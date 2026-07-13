@@ -1,12 +1,12 @@
 ﻿# Threat Model - GDID-Class Tracking
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 ## Purpose of this model
 
 Define what we are defending against when we research and counter Microsoft Global Device Identifier (GDID) tracking - and what we are **not** claiming to solve.
 
-**GDID-only completion boundary:** on a supported unmanaged, single-user Windows 11
+**GDID-only completion boundary:** on a supported unmanaged, single-user Windows
 system, the tool is complete when it can continuously block DeviceAdd and remove
 known active real Device PUID state. General telemetry suppression and discovery of
 the exact Stokes URL-association sensor are open research, not release gates.
@@ -133,8 +133,8 @@ implementation still needs longitudinal validation.
 - 24-hour protection soak across multiple reboots with the current integrated rules.
 - The real target-user/machine GDID contamination shape is covered by interim
   EXP-G; actual MSA UI/sign-in behavior is optional compatibility research.
-- The advertised mutation scope is narrowed to 25H2/build 26200; 24H2 requires
-  its own closure matrix before support expands.
+- Windows 10 22H2/build 19045 and Windows 11 builds outside the lab-validated
+  25H2/build-26200 line require their own closure matrices.
 
 C3 single-store ablation would strengthen the causal account of rehydration, but the
 canonical wipe already removes the entire observed bundle; unique-cause attribution

@@ -1,13 +1,13 @@
 ﻿# Open Questions
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 Living backlog. Resolve with source-backed evidence; distinguish a public negative
 result from something that still needs a controlled lab capture.
 
 ## Tool completion / release hardening
 
-For the supported unmanaged, single-user Windows 11 scope, completion means:
+For the supported unmanaged, single-user Windows scope, completion means:
 
 1. continuously block the DeviceAdd mint path; and
 2. remove known active real Device PUID state with the canonical wipe.
@@ -31,8 +31,10 @@ the exact Stokes URL-association sensor are **not** release gates.
   locally after the earlier bundle cleared; targeted `SSO_POP_Device` and
   WindowsLive `didlogical` credential cleanup is now implemented. Actual MSA UI
   compatibility remains separate from this GDID-state check.
-- [x] Support Windows 11 build 22000 or newer with an explicit warning outside the
-  lab-validated 25H2/build-26200 line.
+- [x] Support Windows 10 22H2/build 19045 and Windows 11 build 22000 or newer,
+  with an explicit warning outside the lab-validated Windows 11
+  25H2/build-26200 line.
+- [ ] Run the full Windows 10 22H2/build-19045 closure matrix.
 - [ ] Run the full closure matrix on additional builds to replace generic support
   warnings with build-specific evidence.
 

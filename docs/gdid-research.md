@@ -1,6 +1,6 @@
 ﻿# Microsoft GDID Research Notes
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 ## Status
 
@@ -12,7 +12,7 @@ Last updated: 2026-07-11
   - [`glossary.md`](./glossary.md) / [`open-questions.md`](./open-questions.md)
 - Project tooling: root [`degdid.ps1`](../degdid.ps1) (public); lab helpers under `tools/`.
 - **Tool completion scope:** continuously block DeviceAdd and remove known active
-  real PUID state on a supported unmanaged, single-user Windows 11 system. General
+  real PUID state on a supported unmanaged, single-user Windows system. General
   telemetry suppression and the exact Stokes URL sensor are research, not release
   gates. Wipe is canonical; decoy is experimental.
 
@@ -158,8 +158,9 @@ The current script now integrates:
 Earlier `[LAB]` runs validate hosts-based DeviceAdd starvation and the expanded wipe
 bundle on a local-account Windows 11 25H2/build-26200 VM. They do not yet validate the
 current integrated rules for 24 hours/multiple reboots or an MSA-contaminated image.
-The advertised mutation scope is now explicitly 25H2/build 26200; 24H2 requires a
-separate closure matrix before support expands.
+The generic mutation scope now also accepts Windows 10 22H2/build 19045 and Windows 11
+build 22000 or newer. Those non-26200 builds remain outside the lab-validated line
+until their separate closure matrices pass.
 
 `[LAB]` EXP-C3 mapped `Immersive\production\Property\<LID>` in the failed-rehydrate
 scenario and removed it with Token/LID/cache state in the successful bundle. Treat

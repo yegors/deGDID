@@ -2,13 +2,13 @@
 <#
 .SYNOPSIS
   Inspect, block, wipe, decoy, or unblock Microsoft GDID state on a supported
-  unmanaged Windows 11 installation with one loaded target human-profile hive.
+  unmanaged Windows installation with one loaded target human-profile hive.
 
 .DESCRIPTION
   degdid resolves the active interactive user explicitly and addresses that
   user's loaded HKEY_USERS hive. Mutating actions refuse domain-joined,
-  Entra-joined, MDM-enrolled, multiple-loaded-human-profile, non-Windows-11, or
-  unloaded-target-hive systems.
+  Entra-joined, MDM-enrolled, multiple-loaded-human-profile, unsupported
+  Windows-build, or unloaded-target-hive systems.
 
   Protect refreshes a canonical dual-stack hosts region and Windows Firewall
   dynamic-keyword FQDN rules, verifies the mint path is blocked, then performs
@@ -123,8 +123,9 @@ $script:FirewallGroup = 'degdid managed registration blocks'
 $script:MintHost = 'login.live.com'
 $script:SettleSeconds = 12
 $script:DegdidExitCode = 0
-$script:SupportedBuild = 26200
-$script:SupportedDisplayVersion = '25H2'
+$script:Windows10SupportedBuild = 19045
+$script:LabValidatedBuild = 26200
+$script:LabValidatedDisplayVersion = '25H2'
 $script:DeviceCredentialTargets = @(
   'MicrosoftAccount:target=SSO_POP_Device',
   'WindowsLive:target=virtualapp/didlogical'
@@ -148,6 +149,15 @@ function Test-RealPuid {
   param([AllowNull()][string]$Value)
 
   return [bool]($Value -and $Value -match '^0018[0-9A-Fa-f]{12}$')
+}
+
+function Test-SupportedWindowsBuild {
+  param([int]$Build)
+
+  return (
+    $Build -eq $script:Windows10SupportedBuild -or
+    $Build -ge 22000
+  )
 }
 
 function ConvertTo-Gdid {
@@ -1836,18 +1846,18 @@ function Get-EnvironmentState {
     $build = [int]$currentVersion.CurrentBuildNumber
     $displayVersion = [string]$currentVersion.DisplayVersion
     $productName = [string]$currentVersion.ProductName
-    if ($build -lt 22000) {
-      [void]$unsupported.Add(
-        'Windows 11 build 22000 or newer is required; found {0} build {1}.' -f
+    if (-not (Test-SupportedWindowsBuild -Build $build)) {
+      [void]$unsupported.Add((
+        'Windows 10 22H2 build 19045 or Windows 11 build 22000 or newer is required; found {0} build {1}.' -f
         $displayVersion,
         $build
-      )
+      ))
     } elseif (
-      $build -ne $script:SupportedBuild -or
-      $displayVersion -ne $script:SupportedDisplayVersion
+      $build -ne $script:LabValidatedBuild -or
+      $displayVersion -ne $script:LabValidatedDisplayVersion
     ) {
       [void]$warnings.Add(
-        'This Windows build is supported generically but is not the lab-validated 25H2 build 26200 line.'
+        'This Windows build is supported generically but is not the lab-validated Windows 11 25H2 build 26200 line.'
       )
     }
   } catch {
@@ -2000,10 +2010,18 @@ function Get-EnvironmentState {
     Supported = ($unsupported.Count -eq 0 -and $targetFailures.Count -eq 0)
     IsAdministrator = Test-IsAdministrator
     IsWindows11 = ($build -ge 22000 -and $workstation)
-    IsSupportedBuild = ($build -ge 22000 -and $workstation)
+    IsWindows10 = (
+      $build -ge 10240 -and
+      $build -lt 22000 -and
+      $workstation
+    )
+    IsSupportedBuild = (
+      (Test-SupportedWindowsBuild -Build $build) -and
+      $workstation
+    )
     IsLabValidatedBuild = (
-      $build -eq $script:SupportedBuild -and
-      $displayVersion -eq $script:SupportedDisplayVersion -and
+      $build -eq $script:LabValidatedBuild -and
+      $displayVersion -eq $script:LabValidatedDisplayVersion -and
       $workstation
     )
     Is64BitProcess = [Environment]::Is64BitProcess
@@ -2502,11 +2520,11 @@ function Test-GdidSourceModelSafety {
             ($cursorItem.Attributes -band
               [System.IO.FileAttributes]::ReparsePoint) -ne 0
           ) {
-            [void]$errors.Add(
+            [void]$errors.Add((
               '{0} cache path contains reparse component {1}.' -f
               $cachePath.Name,
               $cursorItem.Name
-            )
+            ))
             break
           }
         }
@@ -4078,6 +4096,7 @@ function Get-DegdidStatus {
       Supported = $environmentSupported
       IsAdministrator = $environment.IsAdministrator
       IsWindows11 = $environment.IsWindows11
+      IsWindows10 = $environment.IsWindows10
       IsSupportedBuild = $environment.IsSupportedBuild
       IsLabValidatedBuild = $environment.IsLabValidatedBuild
       Is64BitProcess = $environment.Is64BitProcess
@@ -4159,8 +4178,18 @@ function Write-DegdidStatusHuman {
   Write-Output ('degdid status — {0}' -f $Report.Timestamp)
   Write-Output ''
   Write-Output 'This PC'
+  $windowsName = if ($Report.Environment.IsWindows11) {
+    'Windows 11'
+  } elseif ($Report.Environment.IsWindows10) {
+    'Windows 10'
+  } elseif ($Report.Environment.ProductName) {
+    $Report.Environment.ProductName
+  } else {
+    'Windows'
+  }
   Write-Output (
-    '  Windows 11 {0}, build {1}' -f
+    '  {0} {1}, build {2}' -f
+    $windowsName,
     $Report.Environment.DisplayVersion,
     $Report.Environment.Build
   )

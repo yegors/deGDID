@@ -1,12 +1,12 @@
 ﻿# degdid
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 Research and practical hardening for Microsoft's **Global Device Identifier (GDID)**, a server-assigned installation identifier that Windows can acquire even when the interactive user has only a local account.
 
 The repository documents the wider GDID lifecycle. The shipped `degdid.ps1` has a narrower operational objective:
 
-> On a supported Windows 11 target, remove real server-issued GDID state from the known local stores and keep the DeviceAdd path continuously blocked.
+> On a supported Windows target, remove real server-issued GDID state from the known local stores and keep the DeviceAdd path continuously blocked.
 
 That is a GDID completion gate. It is not a general telemetry, browser-privacy, or court-record-channel suppression claim.
 
@@ -14,7 +14,7 @@ That is a GDID completion gate. It is not a general telemetry, browser-privacy, 
 
 `-Block`, `-Wipe`, `-Decoy`, and `-Protect` mutate only when all of the following are established:
 
-- Windows 11 build 22000 or newer; 25H2 build 26200 is the lab-validated line and other builds receive an explicit warning
+- Windows 10 22H2 build 19045, or Windows 11 build 22000 or newer; Windows 11 25H2 build 26200 is the only lab-validated line and other supported builds receive an explicit warning
 - not domain joined
 - not Entra joined, registered, or workplace joined
 - not MDM enrolled

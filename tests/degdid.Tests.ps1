@@ -214,6 +214,21 @@ Describe 'degdid PUID pure helpers' {
   }
 }
 
+Describe 'degdid Windows build support boundary' {
+  It 'supports Windows 10 22H2 build 19045' {
+    (Test-SupportedWindowsBuild 19045) | Should Be $true
+  }
+
+  It 'supports Windows 11 build 22000 and newer' {
+    (Test-SupportedWindowsBuild 22000) | Should Be $true
+    (Test-SupportedWindowsBuild 26200) | Should Be $true
+  }
+
+  It 'refuses older Windows 10 releases' {
+    (Test-SupportedWindowsBuild 19044) | Should Be $false
+  }
+}
+
 Describe 'degdid verdict oracle' {
   It 'returns Error before all other states' {
     (Get-GdidVerdict $true $false $true $false) | Should Be 'Error'
