@@ -172,8 +172,8 @@ cause until a one-store-at-a-time ablation is run.
 ```powershell
 .\degdid.ps1 -Status
 
-# Explicit opt-in redaction for output you intend to share.
-.\degdid.ps1 -Status -Redact
+# JSON form for local diagnostics; do not publish raw output.
+.\degdid.ps1 -Status -Json
 ```
 
 **Do not publish your value.**

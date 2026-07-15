@@ -21,15 +21,17 @@ the exact Stokes URL-association sensor are **not** release gates.
 - [x] Re-run the delayed-rehydrate soak with three-hive plus SYSTEM Credential
   Manager cleanup. EXP-G first exposed SYSTEM/`.DEFAULT` Property/Token stores,
   then SYSTEM `didlogical`. The final revision remained `ProtectedNoRealGdid` at
-  the accepted eight-hour threshold, beyond both prior failure windows. A literal
-  24-hour run is optional and is not claimed.
+  eight hours and again beyond 33 hours, exceeding both prior failure windows and
+  the original 24-hour criterion.
 - [x] Run `-Protect` against the real contaminated state shape: target-user LID,
   Property, Token/Tickets, machine residual cache, and related files. Interim
   `EXP-G` cleared that state and held through two reboots plus service/task
   triggers.
 - [ ] Re-run EXP-H on the MSA-connected profile. The same old user LID returned
   locally after the earlier bundle cleared; targeted `SSO_POP_Device` and
-  WindowsLive `didlogical` credential cleanup is now implemented. Actual MSA UI
+  WindowsLive `didlogical` credential cleanup is now implemented. The latest field
+  run aborted safely when busy `wlidsvc` refused a normal stop; bounded
+  disable/SCM retry with startup restoration now needs the rerun. Actual MSA UI
   compatibility remains separate from this GDID-state check.
 - [x] Support Windows 10 22H2/build 19045 and Windows 11 build 22000 or newer,
   with an explicit warning outside the lab-validated Windows 11

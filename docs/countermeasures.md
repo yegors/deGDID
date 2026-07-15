@@ -123,7 +123,7 @@ Protection is healthy when all required checks pass:
   hosts configuration already valid.
 
 Dynamic-keyword hydration, the managed FQDN rule, the `wlidsvc` rule, staging rules,
-legacy rules, and firewall policy are still reported. They explain defense-in-depth
+and firewall policy are still reported. They explain defense-in-depth
 state but do not force one exact firewall topology when the required path already
 verifies blocked.
 
@@ -158,6 +158,8 @@ The known source model includes:
 - target-user Credential Manager device entries `SSO_POP_Device` and
   WindowsLive `didlogical`;
 - SYSTEM Credential Manager device entries, including WindowsLive `didlogical`;
+- `.DEFAULT` and SYSTEM `IdentityCRL\DeviceIdentities\production` state,
+  including provisioning logs and all device-identity session subtrees;
 - machine IdentityCRL NegativeCache keys whose names embed a captured PUID;
 - target-user TokenBroker cache contents; and
 - target-user ConnectedDevicesPlatform cache contents.
@@ -251,16 +253,14 @@ It removes:
 
 - a valid paired degdid hosts region;
 - current degdid FQDN and `wlidsvc` firewall rules;
-- legacy `degdid-block-*` firewall rules; and
 - degdid deterministic dynamic-keyword objects.
 
 It leaves unrelated hosts lines and firewall rules alone. A malformed or duplicate managed hosts region causes refusal rather than a guessed edit. Successful Unblock warns that a future DeviceAdd can mint a real GDID.
 
 ## Status completion oracle
 
-Status shows the actual account, SID, profile, PUID, and GDID values by default so
-the local operator can understand the machine. `-Redact` hashes those values for
-share-safe output. `-Json` changes format, not disclosure level.
+Status shows the actual account, SID, profile, PUID, and GDID values so the local
+operator can understand the machine. `-Json` changes format, not disclosure level.
 
 The exact verdicts, in precedence order, are:
 
@@ -287,13 +287,13 @@ Because Decoy is `0018`-shaped, it can correctly yield `RealGdidPresent`. That v
 | EXP-D | **Partial H5** | Zero-pending WU scan, Defender update, successful prior blocked-period history, and no mint; no controlled pending CU installation during D. |
 | EXP-E | **Partial/inferred H6** | Desktop, WU scan, Defender, and blocked LiveId path observed; most Store/Xbox/Phone Link behavior inferred, not UI-exercised. |
 | EXP-F | Nuanced | No replacement/remint during approximately five-to-six-minute unblocked trials on the exercised image; no long-window conclusion. |
-| EXP-G | Delayed-rehydrate threshold PASS | Two machine-local gaps were found and fixed; final three-hive + target/SYSTEM credential cleanup stayed `ProtectedNoRealGdid` for the accepted eight-hour window. |
+| EXP-G | Delayed-rehydrate threshold PASS | Two machine-local gaps were found and fixed; final three-hive + target/SYSTEM credential cleanup stayed `ProtectedNoRealGdid` beyond 33 hours. |
 | EXP-H | Target-user remediation passed; persistence pending | MSA user credential cleanup passed immediately; later machine return matched EXP-G gaps now covered by the current script. |
 
 ## Validation still pending
 
-EXP-G passed the accepted eight-hour delayed-rehydrate threshold on the supported
-25H2 guest. Remaining closure work:
+EXP-G exceeded the original 24-hour delayed-rehydrate criterion on the validated
+25H2 guest, remaining clean beyond 33 hours. Remaining closure work:
 
 - remaining session/power and recovery-Unblock transitions
 - final EXP-H MSA-machine rerun/reboot using all three hive and credential scopes

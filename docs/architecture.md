@@ -191,6 +191,7 @@ Also observed on a typical online install (`[LAB]`):
 | `HKEY_USERS\S-1-5-18\…\IdentityCRL\ExtendedProperties\LID` | SYSTEM; `0018` prefix |
 | `.DEFAULT` / SYSTEM `…\IdentityCRL\Immersive\production\Property\<PUID>` | Delayed EXP-G local machine-hive rehydrate store |
 | `.DEFAULT` / SYSTEM `…\IdentityCRL\Immersive\production\Token\*\DeviceId` | Delayed EXP-G found nine matching copies in each machine hive |
+| `.DEFAULT` / SYSTEM `…\IdentityCRL\DeviceIdentities\production` | Provision logs plus per-SID device-key/session roots; retaining sibling logs/identities reconstructed SYSTEM after targeted subtree deletion |
 | `HKCU\…\IdentityCRL\Immersive\production\Property\<PUID>` | Required expanded-wipe member; high-confidence rehydrate store, not uniquely isolated |
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\NegativeCache\<PUID>_…\` | Token/throttle caches keyed by device PUID |
 | `%LOCALAPPDATA%\ConnectedDevicesPlatform\` | CDP state (`.cdp` files); wiping alone does **not** clear PUID |

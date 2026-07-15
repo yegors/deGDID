@@ -33,8 +33,8 @@
   firewall rule, then independently verify the mint-critical path.
 
 .PARAMETER Unblock
-  Remove a valid managed hosts region, managed dynamic keywords, and current
-  or legacy degdid firewall rules. A malformed or duplicate hosts region is
+  Remove the current managed hosts region, dynamic keywords, and firewall rules.
+  A malformed, noncanonical, or duplicate hosts region is
   never guessed at or rewritten.
 
 .PARAMETER Protect
@@ -47,13 +47,6 @@
 .PARAMETER DryRun
   Inspect and report planned work without changing hosts, firewall, services,
   registry, or files. DryRun never claims that planned blocks are active.
-
-.PARAMETER ShowIdentifier
-  Backward-compatible no-op: Status now displays complete identifiers by default.
-
-.PARAMETER Redact
-  Hash account, profile, SID, LID, and GDID values for output intended to be
-  shared. Redaction is opt-in.
 
 .PARAMETER Json
   Emit Status as JSON.
@@ -94,12 +87,6 @@ param(
   [switch]$UseDecoy,
 
   [Parameter(ParameterSetName = 'Status')]
-  [switch]$ShowIdentifier,
-
-  [Parameter(ParameterSetName = 'Status')]
-  [switch]$Redact,
-
-  [Parameter(ParameterSetName = 'Status')]
   [switch]$Json,
 
   [switch]$DryRun,
@@ -112,7 +99,6 @@ $script:MarkerBegin = '# BEGIN degdid-registration-block'
 $script:MarkerEnd = '# END degdid-registration-block'
 $script:HostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
 $script:HostsMutexName = 'Global\degdid-hosts-v2'
-$script:RulePrefix = 'degdid-block-'
 $script:FirewallRuleName = 'degdid-block-fqdn-v2'
 $script:FirewallRuleDisplayName = 'degdid-block-fqdn-v2'
 $script:MintServiceRuleName = 'degdid-block-wlidsvc-v2'
@@ -188,43 +174,6 @@ function Get-Sha256Hex {
   } finally {
     $sha.Dispose()
   }
-}
-
-function Format-GdidIdentifier {
-  param(
-    [AllowNull()][string]$Value,
-    [switch]$Show
-  )
-
-  if (-not $Value) {
-    return '(none)'
-  }
-  if ($Show) {
-    return $Value
-  }
-
-  if (Test-RealPuid $Value) {
-    $hash = (Get-Sha256Hex $Value.ToUpperInvariant()).Substring(0, 8)
-    return '{0}...#{1}' -f $Value.Substring(0, 4).ToUpperInvariant(), $hash
-  }
-  $hash = (Get-Sha256Hex $Value).Substring(0, 8)
-  return '<present>#{0}' -f $hash
-}
-
-function Format-PrivateValue {
-  param(
-    [AllowNull()][string]$Value,
-    [switch]$Show,
-    [string]$Prefix = '<redacted>'
-  )
-
-  if (-not $Value) {
-    return '(none)'
-  }
-  if ($Show) {
-    return $Value
-  }
-  return '{0}#{1}' -f $Prefix, (Get-Sha256Hex $Value).Substring(0, 8)
 }
 
 function Get-EmbeddedRealPuids {
@@ -414,8 +363,8 @@ function Get-HostsDocumentState {
           }
         }
       }
-      # A structurally paired legacy/stale region is safe to replace or remove
-      # only when every interior line has a degdid-owned sink-entry shape.
+      # Structurally paired content is classified separately from canonical
+      # current-format content so callers can refuse noncanonical state.
       if ($ownedContent) {
         $state = 'Valid'
       }
@@ -475,6 +424,11 @@ function Set-GdidHostsRegionText {
       'Managed hosts region is {0}; refusing to guess.' -f $state.State
     )
   }
+  if ($state.State -eq 'Valid' -and -not $state.Canonical) {
+    throw [System.IO.InvalidDataException]::new(
+      'Managed hosts region is not current canonical format.'
+    )
+  }
 
   $lines = @(Get-CanonicalHostsRegionLines -Hosts $Hosts)
   $newLine = $state.PreferredNewLine
@@ -516,9 +470,9 @@ function Remove-GdidHostsRegionText {
   if ($state.State -eq 'Absent') {
     return $Text
   }
-  if ($state.State -ne 'Valid') {
+  if ($state.State -ne 'Valid' -or -not $state.Canonical) {
     throw [System.IO.InvalidDataException]::new(
-      'Managed hosts region is {0}; refusing to guess.' -f $state.State
+      'Managed hosts region is not current canonical format.'
     )
   }
 
@@ -978,7 +932,6 @@ function Get-FirewallState {
       HydratedKeywordCount = 0
       MintKeywordHydrated = $false
       InfrastructureHealthy = $false
-      LegacyRuleCount = 0
       Errors = @()
     }
   }
@@ -1031,17 +984,10 @@ function Get-FirewallState {
   $rules = @()
   $mintServiceRules = @()
   $stagingRules = @()
-  $legacyRules = @()
   try {
     $rules = @(
       Get-NetFirewallRule `
         -DisplayName $script:FirewallRuleDisplayName `
-        -PolicyStore ActiveStore `
-        -ErrorAction SilentlyContinue
-    )
-    $allManagedRules = @(
-      Get-NetFirewallRule `
-        -DisplayName ($script:RulePrefix + '*') `
         -PolicyStore ActiveStore `
         -ErrorAction SilentlyContinue
     )
@@ -1056,15 +1002,6 @@ function Get-FirewallState {
         -Name $script:StagingMintServiceRuleName `
         -PolicyStore ActiveStore `
         -ErrorAction SilentlyContinue
-    )
-    $legacyRules = @(
-      $allManagedRules |
-        Where-Object {
-          $_.DisplayName -notin @(
-            $script:FirewallRuleDisplayName,
-            $script:MintServiceRuleDisplayName
-          )
-        }
     )
   } catch {
     [void]$errors.Add(('Rules: {0}' -f $_.Exception.Message))
@@ -1181,8 +1118,7 @@ function Get-FirewallState {
     $keywordCount -eq 0 -and
     $rules.Count -eq 0 -and
     $mintServiceRules.Count -eq 0 -and
-    $stagingRules.Count -eq 0 -and
-    $legacyRules.Count -eq 0
+    $stagingRules.Count -eq 0
   ) {
     $health = 'Absent'
   } elseif (
@@ -1190,8 +1126,7 @@ function Get-FirewallState {
     $invalid.Count -eq 0 -and
     $ruleValid -and
     $mintServiceRuleValid -and
-    $infrastructureHealthy -and
-    $legacyRules.Count -eq 0
+    $infrastructureHealthy
   ) {
     $health = 'Valid'
   }
@@ -1212,7 +1147,6 @@ function Get-FirewallState {
     HydratedKeywordCount = $hydratedKeywordCount
     MintKeywordHydrated = $mintKeywordHydrated
     InfrastructureHealthy = $infrastructureHealthy
-    LegacyRuleCount = $legacyRules.Count
     Errors = $errors.ToArray()
   }
 }
@@ -1220,11 +1154,6 @@ function Get-FirewallState {
 function Remove-ManagedFirewallRules {
   param([switch]$PreserveMintServiceRule)
 
-  $rules = @(
-    Get-NetFirewallRule `
-      -DisplayName ($script:RulePrefix + '*') `
-      -ErrorAction SilentlyContinue
-  )
   $namedRule = @(
     Get-NetFirewallRule `
       -Name $script:FirewallRuleName `
@@ -1236,7 +1165,7 @@ function Remove-ManagedFirewallRules {
       -ErrorAction SilentlyContinue
   )
   $allRules = @(
-    $rules + $namedRule + $mintNamedRule |
+    $namedRule + $mintNamedRule |
       Sort-Object Name -Unique
   )
   foreach ($rule in $allRules) {
@@ -1476,7 +1405,7 @@ function Remove-FirewallBlock {
     return [pscustomobject]@{
       Success = Test-DynamicFirewallSupport
       DryRun = $true
-      Message = 'Would remove current and legacy managed firewall rules and keywords.'
+      Message = 'Would remove current managed firewall rules and keywords.'
       State = Get-FirewallState
     }
   }
@@ -1524,17 +1453,13 @@ function Test-LooksOnline {
     if ($upAdapters.Count -eq 0) {
       return $false
     }
-
-    $routes = @(
-      Get-NetRoute -ErrorAction Stop |
-        Where-Object {
-          ($_.DestinationPrefix -eq '0.0.0.0/0' -and $_.NextHop -ne '0.0.0.0') -or
-          ($_.DestinationPrefix -eq '::/0' -and $_.NextHop -ne '::')
-        }
-    )
-    return $routes.Count -gt 0
+    # Any live adapter is treated as potentially online. This intentionally
+    # runs the real TCP probe for VPN, proxy, on-link, and unusual route states
+    # instead of misclassifying them as safely offline.
+    return $true
   } catch {
-    return $false
+    throw 'Network adapter state could not be established: {0}' -f
+      $_.Exception.Message
   }
 }
 
@@ -1816,6 +1741,47 @@ function Get-ProfileTopology {
   }
 }
 
+function Get-TargetExplorerSessionCount {
+  param([string]$TargetSid)
+
+  $sessionIds = New-Object System.Collections.Generic.List[int]
+  $ownerErrors = New-Object System.Collections.Generic.List[string]
+  foreach (
+    $process in @(
+      Get-CimInstance Win32_Process `
+        -Filter "Name='explorer.exe'" `
+        -ErrorAction Stop
+    )
+  ) {
+    try {
+      $owner = Invoke-CimMethod `
+        -InputObject $process `
+        -MethodName GetOwnerSid `
+        -ErrorAction Stop
+      if (
+        $owner.ReturnValue -eq 0 -and
+        $owner.Sid -eq $TargetSid -and
+        -not $sessionIds.Contains([int]$process.SessionId)
+      ) {
+        [void]$sessionIds.Add([int]$process.SessionId)
+      } elseif ($owner.ReturnValue -ne 0) {
+        [void]$ownerErrors.Add(
+          'GetOwnerSid returned {0} for Explorer session {1}.' -f
+          $owner.ReturnValue,
+          $process.SessionId
+        )
+      }
+    } catch {
+      [void]$ownerErrors.Add($_.Exception.Message)
+    }
+  }
+  if ($ownerErrors.Count -gt 0) {
+    throw 'One or more Explorer session owners could not be inspected: {0}' -f
+      ($ownerErrors -join '; ')
+  }
+  return $sessionIds.Count
+}
+
 function Get-EnvironmentState {
   $unsupported = New-Object System.Collections.Generic.List[string]
   $warnings = New-Object System.Collections.Generic.List[string]
@@ -1977,6 +1943,23 @@ function Get-EnvironmentState {
         if (-not $hiveLoaded) {
           [void]$targetFailures.Add('The active target user hive is not loaded.')
         }
+        $interactiveSessionCount = -1
+        try {
+          $interactiveSessionCount = Get-TargetExplorerSessionCount -TargetSid $sid
+          if (
+            $targetResolution -eq 'InteractiveConsole' -and
+            $interactiveSessionCount -ne 1
+          ) {
+            [void]$warnings.Add(
+              'Target user has {0} Explorer session(s); interactive credential cleanup requires exactly one.' -f
+              $interactiveSessionCount
+            )
+          }
+        } catch {
+          [void]$inspectionErrors.Add(
+            ('Interactive sessions: {0}' -f $_.Exception.Message)
+          )
+        }
         $target = [pscustomobject]@{
           AccountName = $accountName
           Sid = $sid
@@ -1984,6 +1967,7 @@ function Get-EnvironmentState {
           HivePath = $hivePath
           HiveLoaded = $hiveLoaded
           Resolution = $targetResolution
+          InteractiveSessionCount = $interactiveSessionCount
         }
         if ($hiveLoaded) {
           $workplacePath = (
@@ -2199,12 +2183,33 @@ function Get-TargetCredentialAccessMode {
     [System.Security.Principal.WindowsIdentity]::GetCurrent()
   ).User.Value
   if ($Target.Resolution -eq 'InteractiveConsole') {
+    if ($Target.InteractiveSessionCount -ne 1) {
+      return 'Unavailable'
+    }
     if (Test-IsAdministrator) {
       return 'InteractiveTask'
     }
     if ($currentSid -eq $Target.Sid) {
       return 'DirectInteractive'
     }
+  }
+  if ($Target.Resolution -eq 'AuthenticatedSoleProfile') {
+    if ($Target.InteractiveSessionCount -lt 0) {
+      return 'Unavailable'
+    }
+    if (
+      $Target.InteractiveSessionCount -eq 0 -and
+      $currentSid -eq $Target.Sid
+    ) {
+      return 'DirectCurrentSession'
+    }
+    if (
+      $Target.InteractiveSessionCount -eq 1 -and
+      (Test-IsAdministrator)
+    ) {
+      return 'InteractiveTask'
+    }
+    return 'Unavailable'
   }
   if ($currentSid -eq $Target.Sid) {
     return 'DirectCurrentSession'
@@ -2453,6 +2458,20 @@ function Get-GdidSourceModel {
         }
       }
     )
+    DeviceIdentityPaths = @(
+      [pscustomobject]@{
+        Name = 'DefaultDeviceIdentityProduction'
+        Path = (
+          'Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\DeviceIdentities\production'
+        )
+      },
+      [pscustomobject]@{
+        Name = 'SystemDeviceIdentityProduction'
+        Path = (
+          'Registry::HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL\DeviceIdentities\production'
+        )
+      }
+    )
     NegativeCachePath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
     CredentialAccessMode = Get-TargetCredentialAccessMode -Target $Target
     CredentialTargets = @($script:DeviceCredentialTargets)
@@ -2652,6 +2671,7 @@ function Get-GdidInventory {
   $errors = New-Object System.Collections.Generic.List[string]
   $propertyValues = New-Object System.Collections.Generic.List[object]
   $tokenKeys = New-Object System.Collections.Generic.List[object]
+  $deviceIdentityArtifacts = New-Object System.Collections.Generic.List[object]
   $negativeCacheKeys = New-Object System.Collections.Generic.List[object]
   $cacheArtifacts = New-Object System.Collections.Generic.List[object]
   $deviceCredentials = New-Object System.Collections.Generic.List[object]
@@ -2745,6 +2765,20 @@ function Get-GdidInventory {
     } catch {
       [void]$errors.Add((
         '{0}: {1}' -f $tokenSource.Name, $_.Exception.Message
+      ))
+    }
+  }
+
+  foreach ($deviceIdentityPath in $Model.DeviceIdentityPaths) {
+    try {
+      if (
+        Test-Path -LiteralPath $deviceIdentityPath.Path -ErrorAction Stop
+      ) {
+        [void]$deviceIdentityArtifacts.Add($deviceIdentityPath)
+      }
+    } catch {
+      [void]$errors.Add((
+        '{0}: {1}' -f $deviceIdentityPath.Name, $_.Exception.Message
       ))
     }
   }
@@ -2859,6 +2893,7 @@ function Get-GdidInventory {
     Errors = $errors.ToArray()
     PropertyValues = $propertyValues.ToArray()
     TokenKeys = $tokenKeys.ToArray()
+    DeviceIdentityArtifacts = $deviceIdentityArtifacts.ToArray()
     NegativeCacheKeys = $negativeCacheKeys.ToArray()
     CacheArtifacts = $cacheArtifacts.ToArray()
     CredentialInspectionAvailable = (
@@ -2901,6 +2936,7 @@ function Get-GdidServiceSnapshot {
             Name = $_.Name
             WasRunning = $_.Status -eq 'Running'
             StartType = [string]$_.StartType
+            TemporarilyDisabled = $false
           }
         }
       )
@@ -2952,6 +2988,107 @@ function Add-OperationResult {
   }
 }
 
+function Restore-GdidServiceStartType {
+  param([object]$State)
+
+  if (-not $State.TemporarilyDisabled) {
+    return
+  }
+  $startupType = switch ($State.StartType) {
+    'Automatic' { 'Automatic' }
+    'Manual' { 'Manual' }
+    'Disabled' { 'Disabled' }
+    default {
+      throw 'Unsupported original startup type {0} for {1}.' -f
+        $State.StartType,
+        $State.Name
+    }
+  }
+  Set-Service `
+    -Name $State.Name `
+    -StartupType $startupType `
+    -ErrorAction Stop
+  $State.TemporarilyDisabled = $false
+}
+
+function Wait-GdidServiceStopped {
+  param(
+    [string]$Name,
+    [int]$TimeoutSeconds
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $service = Get-Service -Name $Name -ErrorAction Stop
+    if ($service.Status -eq 'Stopped') {
+      return $true
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Invoke-GdidScStop {
+  param([string]$Name)
+
+  $sc = Join-Path $env:SystemRoot 'System32\sc.exe'
+  return @(& $sc stop $Name 2>&1)
+}
+
+function Stop-GdidServiceRobust {
+  param([object]$State)
+
+  $service = Get-Service -Name $State.Name -ErrorAction Stop
+  if ($service.Status -eq 'Stopped') {
+    return
+  }
+
+  $firstError = $null
+  try {
+    Stop-Service -Name $State.Name -Force -ErrorAction Stop
+  } catch {
+    $firstError = $_.Exception.Message
+  }
+  if (Wait-GdidServiceStopped -Name $State.Name -TimeoutSeconds 20) {
+    return
+  }
+
+  if ($State.Name -ne 'wlidsvc') {
+    throw 'Service {0} did not stop within 20 seconds. Initial error: {1}' -f
+      $State.Name,
+      $firstError
+  }
+
+  # MSA-heavy systems can immediately trigger-start wlidsvc while it is being
+  # stopped. Disable only this service temporarily, retry via SCM, and restore
+  # its original startup type before normal service resumption.
+  try {
+    Set-Service -Name $State.Name -StartupType Disabled -ErrorAction Stop
+    $State.TemporarilyDisabled = $true
+    $scOutput = @(Invoke-GdidScStop -Name $State.Name)
+    if (
+      -not (Wait-GdidServiceStopped -Name $State.Name -TimeoutSeconds 30)
+    ) {
+      throw 'SCM stop timed out. sc.exe: {0}; initial Stop-Service: {1}' -f
+        ($scOutput -join ' '),
+        $firstError
+    }
+  } catch {
+    if ($State.TemporarilyDisabled) {
+      try {
+        Restore-GdidServiceStartType -State $State
+      } catch {
+        Write-Warning (
+          'Failed to restore {0} startup type after stop failure: {1}' -f
+          $State.Name,
+          $_.Exception.Message
+        )
+      }
+    }
+    throw
+  }
+}
+
 function Stop-GdidServices {
   param(
     [object[]]$ServiceStates,
@@ -2967,12 +3104,7 @@ function Stop-GdidServices {
       -OperationName ('StopService:{0}' -f $name) `
       -DryRun:$DryRun `
       -Action {
-        $service = Get-Service -Name $name -ErrorAction Stop
-        if ($service.Status -ne 'Stopped') {
-          Stop-Service -Name $name -Force -ErrorAction Stop
-          $service = Get-Service -Name $name -ErrorAction Stop
-          $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
-        }
+        Stop-GdidServiceRobust -State $state
       }
     if (-not $ok) {
       $success = $false
@@ -2994,12 +3126,7 @@ function Stop-AllGdidServices {
       -Results $Results `
       -OperationName ('FailClosedStopService:{0}' -f $name) `
       -Action {
-        $service = Get-Service -Name $name -ErrorAction Stop
-        if ($service.Status -ne 'Stopped') {
-          Stop-Service -Name $name -Force -ErrorAction Stop
-          $service = Get-Service -Name $name -ErrorAction Stop
-          $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
-        }
+        Stop-GdidServiceRobust -State $state
       }
     if (-not $ok) {
       $success = $false
@@ -3044,6 +3171,7 @@ function Resume-GdidServices {
       -OperationName ('ResumeService:{0}' -f $name) `
       -DryRun:$DryRun `
       -Action {
+        Restore-GdidServiceStartType -State $state
         $service = Get-Service -Name $name -ErrorAction Stop
         if ($service.Status -ne 'Running') {
           Start-Service -Name $name -ErrorAction Stop
@@ -3256,6 +3384,24 @@ function Invoke-IdentityStoreChanges {
       })
   }
 
+  foreach ($deviceIdentity in $Before.DeviceIdentityArtifacts) {
+    $path = $deviceIdentity.Path
+    $name = $deviceIdentity.Name
+    [void](Add-OperationResult `
+      -Results $Results `
+      -OperationName ('ClearDeviceIdentity:{0}' -f $name) `
+      -DryRun:$DryRun `
+      -Action {
+        if (Test-Path -LiteralPath $path -ErrorAction Stop) {
+          Remove-Item `
+            -LiteralPath $path `
+            -Recurse `
+            -Force `
+            -ErrorAction Stop
+        }
+      })
+  }
+
   foreach ($cacheKey in $Before.NegativeCacheKeys) {
     $matchesCaptured = $false
     foreach ($puid in $cacheKey.Puids) {
@@ -3380,6 +3526,9 @@ function Test-WipePostcondition {
     @($Inventory.DeviceCredentials | Where-Object { $_.Present }).Count -gt 0
   ) {
     [void]$reasons.Add('An MSA device credential remains.')
+  }
+  if ($Inventory.DeviceIdentityArtifacts.Count -gt 0) {
+    [void]$reasons.Add('A machine DeviceIdentities subtree remains.')
   }
 
   if ($Mode -eq 'Wipe') {
@@ -3811,56 +3960,7 @@ function Get-StatusHostsState {
   }
 }
 
-function Format-StatusErrorText {
-  param(
-    [AllowNull()][string]$Text,
-    [AllowNull()][object]$Target,
-    [switch]$Show
-  )
-
-  if (-not $Text -or $Show) {
-    return $Text
-  }
-
-  $result = [regex]::Replace(
-    $Text,
-    '(?i)(?<![0-9a-f])0018[0-9a-f]{12}(?![0-9a-f])',
-    '<puid>'
-  )
-  $result = [regex]::Replace(
-    $result,
-    '(?i)S-1-5-21-\d+-\d+-\d+-\d+',
-    '<sid>'
-  )
-
-  if ($null -ne $Target) {
-    $privateValues = @(
-      [pscustomobject]@{ Value = $Target.ProfilePath; Replacement = '<profile>' },
-      [pscustomobject]@{ Value = $Target.AccountName; Replacement = '<account>' },
-      [pscustomobject]@{ Value = $Target.Sid; Replacement = '<sid>' }
-    )
-    foreach ($item in $privateValues) {
-      if ($item.Value) {
-        $result = [regex]::Replace(
-          $result,
-          [regex]::Escape([string]$item.Value),
-          [string]$item.Replacement,
-          [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-        )
-      }
-    }
-  }
-
-  return [regex]::Replace(
-    $result,
-    '(?i)[a-z]:\\Users\\[^\\\s]+',
-    '<profile>'
-  )
-}
-
 function Get-DegdidStatus {
-  param([switch]$ShowIdentifier)
-
   $environment = Get-EnvironmentState
   $hosts = Get-StatusHostsState
   $firewall = Get-FirewallState
@@ -3879,6 +3979,7 @@ function Get-DegdidStatus {
       CacheArtifacts = @()
       PropertyValues = @()
       TokenKeys = @()
+      DeviceIdentityArtifacts = @()
       CredentialInspectionAvailable = $false
       DeviceCredentials = @()
       ActiveRealPuids = @()
@@ -3902,6 +4003,9 @@ function Get-DegdidStatus {
   $deviceCredentialCount = @(
     $inventory.DeviceCredentials | Where-Object { $_.Present }
   ).Count
+  $deviceIdentityArtifactCount = @(
+    $inventory.DeviceIdentityArtifacts
+  ).Count
   $unknownActiveIdentityCount = @(
     $inventory.Entries |
       Where-Object { $_.Category -eq 'Active' -and -not $_.IsReal }
@@ -3917,6 +4021,7 @@ function Get-DegdidStatus {
     $deviceTicketCount -gt 0 -or
     $unknownActiveIdentityCount -gt 0 -or
     $deviceCredentialCount -gt 0 -or
+    $deviceIdentityArtifactCount -gt 0 -or
     -not $inventory.CredentialInspectionAvailable
   )
   $hasError = (
@@ -3929,51 +4034,11 @@ function Get-DegdidStatus {
     -HasRealGdid $hasReal `
     -BlockHealthy $blockHealthy
 
-  $environmentInspectionErrors = @(
-    $environment.InspectionErrors |
-      ForEach-Object {
-        Format-StatusErrorText `
-          -Text $_ `
-          -Target $environment.Target `
-          -Show:$ShowIdentifier
-      }
-  )
-  $environmentWarnings = @(
-    $environment.Warnings |
-      ForEach-Object {
-        Format-StatusErrorText `
-          -Text $_ `
-          -Target $environment.Target `
-          -Show:$ShowIdentifier
-      }
-  )
-  $firewallErrors = @(
-    $firewall.Errors |
-      ForEach-Object {
-        Format-StatusErrorText `
-          -Text $_ `
-          -Target $environment.Target `
-          -Show:$ShowIdentifier
-      }
-  )
-  $inventoryErrors = @(
-    $inventory.Errors |
-      ForEach-Object {
-        Format-StatusErrorText `
-          -Text $_ `
-          -Target $environment.Target `
-          -Show:$ShowIdentifier
-      }
-  )
-  $mintPathErrors = @(
-    $mintPath.Errors |
-      ForEach-Object {
-        Format-StatusErrorText `
-          -Text $_ `
-          -Target $environment.Target `
-          -Show:$ShowIdentifier
-      }
-  )
+  $environmentInspectionErrors = @($environment.InspectionErrors)
+  $environmentWarnings = @($environment.Warnings)
+  $firewallErrors = @($firewall.Errors)
+  $inventoryErrors = @($inventory.Errors)
+  $mintPathErrors = @($mintPath.Errors)
   $mintPathReport = [pscustomobject][ordered]@{
     Health = $mintPath.Health
     Online = $mintPath.Online
@@ -3995,24 +4060,17 @@ function Get-DegdidStatus {
     Profile = '(none)'
     HiveLoaded = $false
     Resolution = '(none)'
+    InteractiveSessionCount = 0
   }
   if ($null -ne $environment.Target) {
     $targetReport = [pscustomobject]@{
       Resolved = $true
-      Account = Format-PrivateValue `
-        -Value $environment.Target.AccountName `
-        -Show:$ShowIdentifier `
-        -Prefix '<account>'
-      Sid = Format-PrivateValue `
-        -Value $environment.Target.Sid `
-        -Show:$ShowIdentifier `
-        -Prefix '<sid>'
-      Profile = Format-PrivateValue `
-        -Value $environment.Target.ProfilePath `
-        -Show:$ShowIdentifier `
-        -Prefix '<profile>'
+      Account = $environment.Target.AccountName
+      Sid = $environment.Target.Sid
+      Profile = $environment.Target.ProfilePath
       HiveLoaded = [bool]$environment.Target.HiveLoaded
       Resolution = $environment.Target.Resolution
+      InteractiveSessionCount = $environment.Target.InteractiveSessionCount
     }
   }
 
@@ -4020,24 +4078,13 @@ function Get-DegdidStatus {
     $inventory.Entries |
       Where-Object { $_.Category -eq 'Active' } |
       ForEach-Object {
-        $sourceText = $_.Source
-        if (-not $ShowIdentifier -and $_.SourceKind -eq 'TokenDeviceId') {
-          $sourceText = 'Token:<client>#{0}' -f (
-            Get-Sha256Hex $_.Source
-          ).Substring(0, 8)
-        }
         [pscustomobject]@{
-          Source = $sourceText
+          Source = $_.Source
           Kind = $_.SourceKind
           IsRealShaped = $_.IsReal
-          Identifier = Format-GdidIdentifier `
-            -Value $_.RawIdentifier `
-            -Show:$ShowIdentifier
+          Identifier = $_.RawIdentifier
           Gdid = $(if ($_.IsReal) {
-            Format-PrivateValue `
-              -Value (ConvertTo-Gdid $_.RawIdentifier) `
-              -Show:$ShowIdentifier `
-              -Prefix '<gdid>'
+            ConvertTo-Gdid $_.RawIdentifier
           } else {
             '(not-real-shaped)'
           })
@@ -4051,9 +4098,7 @@ function Get-DegdidStatus {
         [pscustomobject]@{
           Source = $_.Source
           Kind = $_.SourceKind
-          Identifier = Format-GdidIdentifier `
-            -Value $_.RawIdentifier `
-            -Show:$ShowIdentifier
+          Identifier = $_.RawIdentifier
         }
       }
   )
@@ -4069,13 +4114,8 @@ function Get-DegdidStatus {
           Sort-Object -Unique
       )
       [pscustomobject][ordered]@{
-        Gdid = Format-PrivateValue `
-          -Value (ConvertTo-Gdid $puid) `
-          -Show:$ShowIdentifier `
-          -Prefix '<gdid>'
-        RegistryId = Format-GdidIdentifier `
-          -Value $puid `
-          -Show:$ShowIdentifier
+        Gdid = ConvertTo-Gdid $puid
+        RegistryId = $puid
         Active = @(
           $matchingEntries | Where-Object { $_.Category -eq 'Active' }
         ).Count -gt 0
@@ -4125,10 +4165,7 @@ function Get-DegdidStatus {
       IPv6Count = $hosts.IPv6Count
       MissingIPv4 = @($hosts.MissingIPv4)
       MissingIPv6 = @($hosts.MissingIPv6)
-      Error = Format-StatusErrorText `
-        -Text $hosts.Error `
-        -Target $environment.Target `
-        -Show:$ShowIdentifier
+      Error = $hosts.Error
     }
     Firewall = [pscustomobject][ordered]@{
       Available = $firewall.Available
@@ -4146,7 +4183,6 @@ function Get-DegdidStatus {
       HydratedKeywordCount = $firewall.HydratedKeywordCount
       MintKeywordHydrated = $firewall.MintKeywordHydrated
       InfrastructureHealthy = $firewall.InfrastructureHealthy
-      LegacyRuleCount = $firewall.LegacyRuleCount
       Errors = $firewallErrors
     }
     MintPath = $mintPathReport
@@ -4156,6 +4192,7 @@ function Get-DegdidStatus {
       UnknownIdentityCount = $unknownActiveIdentityCount
       DeviceTicketCount = $deviceTicketCount
       DeviceCredentialCount = $deviceCredentialCount
+      DeviceIdentityArtifactCount = $deviceIdentityArtifactCount
       DeviceCredentialInspectionAvailable = (
         [bool]$inventory.CredentialInspectionAvailable
       )
@@ -4213,6 +4250,15 @@ function Write-DegdidStatusHuman {
       $Report.Environment.DormantProfileCount
     )
   }
+  if (
+    $Report.TargetUser.Resolution -eq 'InteractiveConsole' -and
+    $Report.TargetUser.InteractiveSessionCount -ne 1
+  ) {
+    Write-Output (
+      '  Interactive sessions for target: {0} (credential cleanup requires exactly one)' -f
+      $Report.TargetUser.InteractiveSessionCount
+    )
+  }
 
   $blockActive = (
     $Report.Hosts.State -eq 'Valid' -and
@@ -4253,6 +4299,7 @@ function Write-DegdidStatusHuman {
       $Report.ActiveStoreInventory.DeviceTicketCount -gt 0 -or
       $Report.ActiveStoreInventory.UnknownIdentityCount -gt 0 -or
       $Report.ActiveStoreInventory.DeviceCredentialCount -gt 0 -or
+      $Report.ActiveStoreInventory.DeviceIdentityArtifactCount -gt 0 -or
       -not $Report.ActiveStoreInventory.DeviceCredentialInspectionAvailable
     ) {
       Write-Output '  No readable GDID was found, but opaque identity state remains.'
@@ -4294,6 +4341,12 @@ function Write-DegdidStatusHuman {
     Write-Output (
       '  MSA device credentials that can restore device identity: {0}' -f
       $Report.ActiveStoreInventory.DeviceCredentialCount
+    )
+  }
+  if ($Report.ActiveStoreInventory.DeviceIdentityArtifactCount -gt 0) {
+    Write-Output (
+      '  Machine DeviceIdentities roots that can restore device identity: {0}' -f
+      $Report.ActiveStoreInventory.DeviceIdentityArtifactCount
     )
   }
   if (-not $Report.ActiveStoreInventory.DeviceCredentialInspectionAvailable) {
@@ -4344,7 +4397,6 @@ function Write-DegdidStatusHuman {
   }
   Write-Output ''
   Write-Output 'For full technical diagnostics: .\degdid.ps1 -Status -Json'
-  Write-Output 'For share-safe output:         .\degdid.ps1 -Status -Redact'
 }
 
 function Invoke-DnsFlush {
@@ -4489,7 +4541,7 @@ function Write-MutationResult {
   if ($Result.Decoy) {
     Write-Output (
       'GeneratedDecoy={0}' -f
-      (Format-GdidIdentifier -Value $Result.Decoy -Show)
+      $Result.Decoy
     )
   }
   $failed = @($Result.Results | Where-Object { -not $_.Success })
@@ -4502,13 +4554,13 @@ function Write-MutationResult {
     Write-Output (
       'OperationFailure {0}: {1}' -f
       $failure.Name,
-      (Format-StatusErrorText -Text $failure.Error -Show)
+      $failure.Error
     )
   }
   foreach ($errorText in $Result.Errors) {
     Write-Output (
       'Error: {0}' -f
-      (Format-StatusErrorText -Text $errorText -Show)
+      $errorText
     )
   }
   if (-not $Result.Success -and $null -ne $Result.AfterInventory) {
@@ -4548,8 +4600,7 @@ function Invoke-DegdidMain {
   }
 
   if ($Status) {
-    $displayFullIdentifiers = ($ShowIdentifier -or -not $Redact)
-    $report = Get-DegdidStatus -ShowIdentifier:$displayFullIdentifiers
+    $report = Get-DegdidStatus
     if ($Json) {
       Write-Output ($report | ConvertTo-Json -Depth 8)
     } else {
@@ -4663,9 +4714,7 @@ if (-not $InternalNoExit) {
   try {
     Invoke-DegdidMain
   } catch {
-    $safeError = Format-StatusErrorText `
-      -Text $_.Exception.Message `
-      -Show:(-not $Redact)
+    $safeError = $_.Exception.Message
     if ($Json) {
       Write-Output (
         [pscustomobject][ordered]@{

@@ -17,5 +17,5 @@ These notes use a **GDID-only completion gate**: a run may close only the local 
 | [EXP-D](./EXP-D-windows-update-blocks.md) | **H5 partial** | Zero-pending WU scan + Defender + history; no controlled pending CU |
 | [EXP-E](./EXP-E-breakage-catalog.md) | **Partial / inferred** | Named UI paths were not exercised |
 | [EXP-F](./EXP-F-unblock-remint.md) | Observed - short window | Decoy/wipe unblock behavior; **wipe-remint not proven**; EXP-B is first-chance mint only |
-| [EXP-G](./EXP-G-pending-closure-hardening-matrix.md) | **PASS at accepted 8h threshold** | SYSTEM/`.DEFAULT` Property/Token and SYSTEM `didlogical` gaps were found; final three-hive + SYSTEM-credential revision remained clean beyond both prior failure windows |
-| [EXP-H](./EXP-H-msa-local-rehydrate.md) | **Target-user fix passed; final persistence rerun pending** | MSA user rehydrate was fixed; later machine-PUID return matched EXP-G machine-hive/SYSTEM credential gaps now covered by the current script |
+| [EXP-G](./EXP-G-pending-closure-hardening-matrix.md) | **PASS beyond 33h** | SYSTEM/`.DEFAULT` Property/Token and SYSTEM `didlogical` gaps were found; final three-hive + target/SYSTEM credential revision exceeded the original 24-hour criterion |
+| [EXP-H](./EXP-H-msa-local-rehydrate.md) | **Target-user fix passed; robust-stop rerun pending** | Machine-state cleanup was correctly blocked when busy `wlidsvc` refused a normal stop; bounded disable/SCM retry added |

@@ -27,6 +27,7 @@ suppression and the exact Stokes URL sensor remain research.
 | `HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | SYSTEM | SYSTEM copy; often present once minted |
 | `.DEFAULT` / SYSTEM `IdentityCRL\Immersive\production\Property` | value name = device PUID | Elevated | Delayed EXP-G machine-hive rehydrate store; same pattern as target-user Property |
 | `.DEFAULT` / SYSTEM `IdentityCRL\Immersive\production\Token\*` | `DeviceId`, `DeviceTicket` | Elevated | Delayed EXP-G found nine DeviceId copies in each machine hive |
+| `.DEFAULT` / SYSTEM `IdentityCRL\DeviceIdentities\production` | Provision logs and per-SID device-key/session subtrees | Elevated | Full method matrix showed sibling logs/identities can reconstruct SYSTEM after only `S-1-5-18` is removed; entire production state is now cleared |
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\NegativeCache\<PUID>_*\` | cache keys | SYSTEM | Keyed by device PUID; scopes/tokens |
 | `HKLM\SOFTWARE\Microsoft\IdentityCRL\ThrottleCache\*` | throttle | SYSTEM | Often includes client GUID |
 | `HKLM\SOFTWARE\Microsoft\IdentityStore\Providers\*` | providers | SYSTEM | MSA / AzureAD provider registration |

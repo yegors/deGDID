@@ -75,7 +75,9 @@ The default protection action is:
 This applies the block gate and performs the expanded **Wipe**. The wipe covers known
 target-user, SYSTEM, and `.DEFAULT` LID, Immersive Property, Token DeviceId, and
 DeviceTicket stores; target-user MSA device credentials; the SYSTEM-session
-WindowsLive `didlogical` device credential; matching machine NegativeCache entries;
+WindowsLive `didlogical` device credential; machine
+entire `IdentityCRL\DeviceIdentities\production` state in `.DEFAULT` and SYSTEM;
+matching machine NegativeCache entries;
 and target-user
 TokenBroker/ConnectedDevicesPlatform caches. It then waits, re-inventories, and
 requires old or newly rehydrated PUIDs and device credentials to be absent.
@@ -103,18 +105,11 @@ Status is the default action:
 ```
 
 Status is written for the person at the keyboard: it shows the actual account,
-profile, registry PUIDs, and `g:<decimal>` GDIDs by default. Use explicit redaction
-only when preparing output to share:
-
-```powershell
-.\degdid.ps1 -Status -Redact
-```
-
-Structured JSON follows the same rule:
+profile, registry PUIDs, and `g:<decimal>` GDIDs. Structured JSON contains the same
+full values:
 
 ```powershell
 .\degdid.ps1 -Status -Json
-.\degdid.ps1 -Status -Json -Redact
 ```
 
 The verdict is exactly one of:
@@ -144,7 +139,6 @@ script's `-Unblock` action, which removes GDID network controls.
 | Command | Meaning |
 |---------|---------|
 | `.\degdid.ps1 -Status` | Human-readable diagnosis with actual local GDID values. |
-| `.\degdid.ps1 -Status -Redact` | Share-safe diagnosis with identifying values hashed. |
 | `.\degdid.ps1 -Status -Json` | Emit full technical diagnostics as JSON. |
 | `.\degdid.ps1 -Block` | Refresh and verify the dual-stack hosts and firewall gate. |
 | `.\degdid.ps1 -Protect` | Block, verify, then run canonical Wipe. |
@@ -156,7 +150,10 @@ script's `-Unblock` action, which removes GDID network controls.
 
 `-Wipe` and `-Decoy` do not merely warn about a missing block; they refuse to mutate. Use `-Protect` for the normal order.
 
-`-Unblock` remains usable if the machine later becomes managed, gains another profile, or has no interactive user. It removes a valid paired managed hosts region, managed dynamic keywords, and current or legacy `degdid-block-*` firewall rules. It refuses malformed or duplicate hosts markers rather than guessing at unrelated content.
+`-Unblock` remains usable if the machine later becomes managed, gains another
+profile, or has no interactive user. It removes only the current canonical managed
+hosts region, deterministic dynamic keywords, and exact current firewall rules. It
+refuses noncanonical, malformed, or duplicate hosts state rather than migrating it.
 
 ## Lab evidence and limits
 
@@ -172,11 +169,11 @@ Historical experiments used a Hyper-V Windows 11 25H2 build 26200 local-account 
 | EXP-D | WU COM scan returned zero pending updates, Defender signature update succeeded, prior blocked-period update history was successful, and no PUID appeared. | **Partial H5:** no controlled pending cumulative update was downloaded and installed during this experiment. |
 | EXP-E | Desktop access, update scan, and Defender worked; the LiveId path was blocked. Store/Xbox/Phone Link effects were mostly inferred from blocked dependencies and package presence. | **Partial/inferred** breakage catalog; UI workflows were not exercised. |
 | EXP-F | A decoy was not replaced during about six minutes unblocked; an unblocked wipe stayed empty for about five to six minutes on the exercised image. | Nuanced short result; neither eventual remint nor durable safety was proved. |
-| EXP-G | Two delayed failures exposed SYSTEM/`.DEFAULT` Property/Token state and then SYSTEM `didlogical`. | Final three-hive + target/SYSTEM credential cleanup remained `ProtectedNoRealGdid` for the accepted eight-hour threshold, beyond both prior failure windows. |
-| EXP-H | An MSA profile first restored the same old user LID locally; targeted interactive-session device-credential cleanup was added. | Immediate rerun passed with zero PUIDs or credentials; reboot/persistence confirmation remains pending. |
+| EXP-G | Two delayed failures exposed SYSTEM/`.DEFAULT` Property/Token state and then SYSTEM `didlogical`. | Final three-hive + target/SYSTEM credential cleanup remained `ProtectedNoRealGdid` beyond 33 hours, exceeding both prior failure windows and the original 24-hour criterion. |
+| EXP-H | MSA user rehydrate was fixed; the later machine return matched EXP-G scopes. | Full machine cleanup then aborted safely because busy `wlidsvc` refused a normal stop; bounded disable/SCM retry added, rerun pending. |
 
 EXP-G has passed the accepted delayed-rehydrate threshold. Remaining work is the
-discrete session/recovery matrix and EXP-H MSA reboot/persistence confirmation.
+discrete session/recovery matrix and EXP-H robust-stop/persistence confirmation.
 
 ## Expected compatibility impact
 

@@ -105,21 +105,15 @@ Local human report with full values:
 .\degdid.ps1 -Status
 ```
 
-Share-safe redacted JSON for evidence:
-
-```powershell
-.\degdid.ps1 -Status -Json -Redact
-```
-
 Private full-value JSON, never committed:
 
 ```powershell
 .\degdid.ps1 -Status -Json
 ```
 
-`-Redact` retains stable short hashes, which are sufficient to compare continuity
-in committed notes. Full default output stays local and should be deleted when the
-experiment no longer needs it.
+Full Status output stays local and should be deleted when the experiment no longer
+needs it. Commit only identifier-free summaries and explicitly computed comparison
+hashes, never raw Status output.
 
 Every status record must include:
 
@@ -206,8 +200,7 @@ When local firewall policy permits, it should also refresh/report:
   hydration reported separately;
 - one enabled outbound deny over the complete keyword set; it is not assumed
   enforced while all keyword address sets are empty;
-- one enabled outbound deny for `svchost.exe` service `wlidsvc`; and
-- no legacy `degdid-block-*` firewall rules.
+- one enabled outbound deny for `svchost.exe` service `wlidsvc`.
 
 Those supplemental rules are not mandatory if another firewall policy/state exists
 or cannot be rewritten and the actual DeviceAdd path still verifies blocked.
@@ -226,8 +219,11 @@ Do not blanket-block `*.microsoft.com`. The activity and DDS names in this set s
 The current expanded bundle covers:
 
 - target-user, `.DEFAULT`, and SYSTEM `LID`;
-- target-user Immersive Property values;
-- target-user Token `DeviceId` and `DeviceTicket`;
+- target-user, `.DEFAULT`, and SYSTEM Immersive Property values;
+- target-user, `.DEFAULT`, and SYSTEM Token `DeviceId` and `DeviceTicket`;
+- `.DEFAULT` and SYSTEM `DeviceIdentities\production` state, including logs and
+  all per-SID device identity sessions;
+- target-user and SYSTEM Credential Manager device targets;
 - matching machine NegativeCache keys;
 - target-user TokenBroker cache contents; and
 - target-user ConnectedDevicesPlatform cache contents.
@@ -300,7 +296,7 @@ On disposable clones, test:
 |------|-----------------|
 | No managed hosts region or rules | Block creates canonical current state |
 | Valid canonical region and rules | Block refreshes idempotently and verifies |
-| Structurally paired stale/legacy region | Block replaces it with canonical dual-stack content |
+| Structurally paired but noncanonical region | Block and Unblock refuse it |
 | Malformed marker | Block and Unblock refuse with exit code 4 |
 | Duplicate region | Block and Unblock refuse with exit code 4 |
 | Hosts file reparse point | Refuse to follow it |
@@ -308,7 +304,6 @@ On disposable clones, test:
 | Invalid/duplicate keyword | Status degraded; Block replaces managed keyword state |
 | Missing or invalid FQDN rule | Status degraded; Block recreates it |
 | Missing or invalid `wlidsvc` rule | Status degraded; Block recreates it |
-| Legacy `degdid-block-*` rule present | Block removes legacy state and establishes current rules |
 
 For every hosts case, compare unrelated lines, newline style, encoding/BOM, and backup creation. Never run malformed-marker tests on a non-disposable host.
 
@@ -404,7 +399,7 @@ Normal recovery:
 
 1. From `S9-recovery`, preserve unrelated hosts lines and firewall rules as comparison fixtures.
 2. Run `.\degdid.ps1 -Unblock`.
-3. Verify only the valid managed hosts region, deterministic dynamic keywords, current rules, and legacy `degdid-block-*` rules are gone.
+3. Verify only the current canonical hosts region, deterministic dynamic keywords, and exact current rules are gone.
 4. Verify unrelated fixtures are unchanged.
 5. Confirm the warning that future DeviceAdd can mint.
 

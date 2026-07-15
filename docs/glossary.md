@@ -18,7 +18,7 @@ Last updated: 2026-07-11
 | **ZTD** | Zero Touch Deployment / Autopilot path via `ztd.dds.microsoft.com` |
 | **Wipe** | Canonical tool mutation: remove known active real Device PUID state and related known local copies only after the DeviceAdd block gate verifies |
 | **Decoy** | Experimental mutation: install a local `0018…`-shaped value with no claim that Microsoft issued or recognizes it |
-| **Protection gate** | Independent checks that the dual-stack hosts region, FQDN/service firewall rules, and mint-critical path are healthy before identity mutation |
+| **Protection gate** | Required canonical dual-stack hosts plus actual mint-path verification; managed FQDN/service firewall rules are reported defense in depth, not a mandatory topology |
 
 ## Confidence tags
 

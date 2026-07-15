@@ -1,6 +1,6 @@
 # EXP-G - Pending closure / hardening matrix
 
-Status: **PASS AT 8-HOUR DELAYED-REHYDRATE THRESHOLD — SYSTEM credential cleanup held beyond both prior failure windows**
+Status: **PASS BEYOND 33 HOURS — three-hive plus target/SYSTEM credential cleanup held past the original 24-hour criterion**
 
 This began as an experiment design. The bounded interim observations below are now recorded; unexecuted rows remain pending and no longer-duration outcome is implied.
 
@@ -155,9 +155,9 @@ inspection/deletion. Immediate rerun:
 
 An eight-hour threshold check was armed to exceed both earlier failure windows.
 
-## Final eight-hour threshold result — PASS
+## Final delayed-rehydrate result — PASS beyond 33 hours
 
-At eight hours after the SYSTEM-credential revision:
+At eight hours, and again more than 33 hours after the SYSTEM-credential revision:
 
 - verdict remained `ProtectedNoRealGdid`;
 - target-user, `.DEFAULT`, and SYSTEM active-store counts were `0`;
@@ -168,13 +168,18 @@ At eight hours after the SYSTEM-credential revision:
 - canonical A/AAAA sink responses remained active; and
 - TCP to `login.live.com` remained blocked.
 
-This exceeds both earlier delayed-failure windows (roughly seven and eight hours).
-The project accepts this eight-hour targeted threshold as the bounded G2 closure
-window; a literal 24-hour run remains optional rather than claimed.
+This exceeds both earlier delayed-failure windows (roughly seven and eight hours)
+and the original 24-hour criterion. G2 is closed for the measured 33-hour window;
+no indefinite-duration claim is made.
+
+The VM was then refreshed with the current script and force-rebooted once more.
+Pre-reboot and post-heartbeat Status both returned `ProtectedNoRealGdid`, with zero
+PUIDs, tickets, target/SYSTEM device credentials, and cache entries. The canonical
+hosts and actual DeviceAdd path remained healthy after reboot.
 
 ## Closure rule
 
-G2 is closed for the accepted eight-hour bounded window. Remaining discrete matrix
+G2 is closed for the measured 33-hour bounded window. Remaining discrete matrix
 work is G3 session/power transitions and a disposable-guest G8 confirmation; G7 has
 multiple real fail-closed defects plus unit coverage but not every synthetic branch.
 G6 is optional expansion to 24H2. G9 is optional, but H5 remains partial until a

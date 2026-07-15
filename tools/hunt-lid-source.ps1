@@ -10,8 +10,7 @@ param(
   [ValidateSet('Map', 'AuditOn', 'AuditOff', 'WipeWatch', 'AuditRead', 'DeepSearch')]
   [string]$Phase = 'Map',
   [string]$KnownLid = '',
-  [string]$TargetSid = '',
-  [switch]$ShowIdentifier
+  [string]$TargetSid = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -78,60 +77,15 @@ $extNative = $researchTarget.RegistryNativePath
 $userLocal = Join-Path $targetLocalAppData 'Microsoft'
 $userRoaming = Join-Path $researchTarget.ProfilePath 'AppData\Roaming\Microsoft'
 
-function Get-ShortHash([string]$value) {
-  if (-not $value) { return '-' }
-  $sha = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($value)
-    return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 8)
-  } finally {
-    $sha.Dispose()
-  }
-}
-
-function Format-Identifier([string]$value) {
-  if (-not $value) { return '(none)' }
-  if ($ShowIdentifier) { return $value }
-  $prefix = if ($value.Length -ge 4) { $value.Substring(0, 4) } else { '<id>' }
-  return '{0}...#{1}' -f $prefix, (Get-ShortHash $value)
-}
-
-function Format-ResearchText([string]$value) {
-  if ($ShowIdentifier -or -not $value) { return $value }
-  $result = $value
-  $result = [regex]::Replace(
-    $result,
-    '(?i)(?<![0-9a-f])0018[0-9a-f]{12}(?![0-9a-f])',
-    '<puid>'
-  )
-  $result = [regex]::Replace(
-    $result,
-    '(?i)S-1-5-21-\d+-\d+-\d+-\d+',
-    '<sid>'
-  )
-  if ($researchTarget.ProfilePath) {
-    $result = [regex]::Replace(
-      $result,
-      [regex]::Escape($researchTarget.ProfilePath),
-      '<profile>',
-      [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-    )
-  }
-  return $result
-}
-
 function Get-CurrentLid {
   if (-not (Test-Path $extPath)) { return $null }
   return (Get-ItemProperty $extPath -EA SilentlyContinue).LID
 }
 
-function Format-RedactedValue([string]$name, $v) {
+function Format-SafeValue([string]$name, $v) {
   if ($null -eq $v) { return $null }
   if ($v -is [byte[]]) { return "bytes[$($v.Length)]" }
   $s = "$v"
-  if ($name -match '^(LID|DeviceId)$') {
-    return Format-Identifier $s
-  }
   if ($name -match 'Ticket|Token|Secret|Password|Key|Blob|Credential') {
     return "REDACTED(len=$($s.Length))"
   }
@@ -147,12 +101,7 @@ function Write-PropertyDump([string]$path, [string]$label) {
   Write-Output $label
   $p = Get-ItemProperty $path -EA SilentlyContinue
   $p.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
-    $displayName = if ($_.Name -match '^(?i)0018[0-9a-f]{12}$') {
-      Format-Identifier $_.Name
-    } else {
-      $_.Name
-    }
-    Write-Output ("  {0}={1}" -f $displayName, (Format-RedactedValue $_.Name $_.Value))
+    Write-Output ("  {0}={1}" -f $_.Name, (Format-SafeValue $_.Name $_.Value))
   }
 }
 
@@ -318,12 +267,12 @@ switch ($Phase) {
     )
     foreach ($d in $dirs) {
       if (-not (Test-Path $d)) {
-        Write-Output ("MISS {0}" -f (Format-ResearchText $d))
+        Write-Output ("MISS {0}" -f $d)
         continue
       }
-      Write-Output ("DIR {0}" -f (Format-ResearchText $d))
+      Write-Output ("DIR {0}" -f $d)
       Get-ChildItem $d -Recurse -Force -EA SilentlyContinue | Select-Object -First 40 | ForEach-Object {
-        Write-Output ("  {0} len={1}" -f (Format-ResearchText $_.FullName), $_.Length)
+        Write-Output ("  {0} len={1}" -f $_.FullName, $_.Length)
       }
     }
   }
@@ -349,7 +298,7 @@ switch ($Phase) {
           Write-Output ("--- {0:o} ---" -f $_.TimeCreated)
           ($_.Message -split "`r?`n") | Where-Object {
             $_ -match 'Account Name|Process Name|Process ID|Object Name|Object Value Name|Operation'
-          } | ForEach-Object { Write-Output (Format-ResearchText $_) }
+          } | ForEach-Object { Write-Output $_ }
         }
     } catch {
       Write-Output ("No 4657 / access denied: {0}" -f $_.Exception.Message)
@@ -384,7 +333,7 @@ switch ($Phase) {
             if ($ascii.Contains($lid) -or $ascii.Contains($dec) -or $utf16.Contains($lid) -or $utf16.Contains($dec)) {
               Write-Output (
                 "HIT {0} len={1}" -f
-                (Format-ResearchText $_.FullName),
+                $_.FullName,
                 $_.Length
               )
               $hits++

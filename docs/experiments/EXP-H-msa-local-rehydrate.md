@@ -1,7 +1,7 @@
 # EXP-H - MSA profile local LID rehydrate
 
 Date: 2026-07-12  
-Evidence: **user-provided field run; target-user remediation passed; delayed machine-hive remediation pending rerun**
+Evidence: **user-provided field run; target-user remediation passed; machine cleanup blocked by busy wlidsvc; robust-stop rerun pending**
 
 ## Environment
 
@@ -97,3 +97,23 @@ the same delayed machine-hive/SYSTEM-credential gaps found independently in EXP-
 
 The current script now applies the EXP-G three-hive and SYSTEM Credential Manager
 cleanup to this case as well. A final MSA-machine rerun/reboot remains pending.
+
+## Fourth field attempt — busy wlidsvc refused normal stop
+
+The latest pre-state showed the original machine PUID across `.DEFAULT` and SYSTEM:
+
+- both LID stores;
+- both Immersive Property stores;
+- 26 Token DeviceId copies;
+- 26 DeviceTickets; and
+- two device Credential Manager targets.
+
+Protect verified the required hosts and actual DeviceAdd path, then aborted before
+identity mutation because running `wlidsvc` rejected the ordinary service stop.
+Operation accounting showed one failed stop and no identity writes, so the
+fail-closed behavior was correct.
+
+The service quiesce path now waits through stop-pending, then—only for busy
+`wlidsvc`—temporarily sets startup to Disabled, retries via SCM, and restores the
+original startup type before normal resume. It does not terminate the shared
+`svchost` process or indiscriminately stop dependencies. Rerun remains pending.

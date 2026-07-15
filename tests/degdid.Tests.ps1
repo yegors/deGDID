@@ -2,6 +2,14 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repositoryRoot 'degdid.ps1'
 . $scriptPath -InternalNoExit
 
+Describe 'degdid current public interface' {
+  It 'has no redaction or deprecated identifier switches' {
+    $parameters = @((Get-Command $scriptPath).Parameters.Keys)
+    ($parameters -contains 'Redact') | Should Be $false
+    ($parameters -contains 'ShowIdentifier') | Should Be $false
+  }
+}
+
 Describe 'degdid hosts parser' {
   $hosts = @('one.example', 'two.example')
   $canonicalLines = @(Get-CanonicalHostsRegionLines -Hosts $hosts)
@@ -24,7 +32,7 @@ Describe 'degdid hosts parser' {
     $state.MissingIPv6.Count | Should Be 0
   }
 
-  It 'recognizes a structurally valid but stale legacy region' {
+  It 'detects a structurally paired but noncanonical region' {
     $text = @(
       $script:MarkerBegin
       '0.0.0.0 one.example'
@@ -82,8 +90,8 @@ Describe 'degdid canonical hosts rendering' {
     (Set-GdidHostsRegionText -Text $text -Hosts $hosts) | Should Be $text
   }
 
-  It 'upgrades a paired IPv4-only legacy region to canonical dual-stack' {
-    $legacy = @(
+  It 'refuses to upgrade an old IPv4-only region' {
+    $oldRegion = @(
       'before=untouched'
       $script:MarkerBegin
       '0.0.0.0 one.example'
@@ -91,12 +99,8 @@ Describe 'degdid canonical hosts rendering' {
       $script:MarkerEnd
       'after=untouched'
     ) -join "`r`n"
-    $updated = Set-GdidHostsRegionText -Text $legacy -Hosts $hosts
-    $state = Get-HostsDocumentState -Text $updated -Hosts $hosts
-    $state.State | Should Be 'Valid'
-    $state.Canonical | Should Be $true
-    $updated | Should Match 'before=untouched'
-    $updated | Should Match 'after=untouched'
+    { Set-GdidHostsRegionText -Text $oldRegion -Hosts $hosts } |
+      Should Throw
   }
 
   It 'removes only a valid region and preserves unrelated lines exactly' {
@@ -111,17 +115,16 @@ Describe 'degdid canonical hosts rendering' {
     (Remove-GdidHostsRegionText -Text $text -Hosts $hosts) | Should Be $text
   }
 
-  It 'removes a structurally paired legacy region safely' {
-    $legacy = @(
+  It 'refuses to remove a noncanonical paired region' {
+    $oldRegion = @(
       'before=untouched'
       $script:MarkerBegin
       '0.0.0.0 one.example'
       $script:MarkerEnd
       'after=untouched'
     ) -join "`r`n"
-    $expected = "before=untouched`r`nafter=untouched"
-    (Remove-GdidHostsRegionText -Text $legacy -Hosts $hosts) |
-      Should Be $expected
+    { Remove-GdidHostsRegionText -Text $oldRegion -Hosts $hosts } |
+      Should Throw
   }
 
   It 'refuses to unblock a malformed region' {
@@ -195,14 +198,6 @@ Describe 'degdid PUID pure helpers' {
   It 'converts a 64-bit hexadecimal PUID to the documented GDID form' {
     (ConvertTo-Gdid '0018000FC8CB93CC') | Should Be 'g:6755467234350028'
     (ConvertTo-Gdid 'not-a-puid') | Should Be $null
-  }
-
-  It 'redacts a PUID by default with a stable prefix and hash' {
-    $redacted = Format-GdidIdentifier '0018000FC8CB93CC'
-    $redacted | Should Match '^0018\.\.\.#[0-9a-f]{8}$'
-    (Format-GdidIdentifier '0018000FC8CB93CC') | Should Be $redacted
-    (Format-GdidIdentifier '0018000FC8CB93CC' -Show) |
-      Should Be '0018000FC8CB93CC'
   }
 
   It 'extracts distinct embedded real PUIDs from cache key names' {
@@ -321,6 +316,84 @@ Describe 'degdid generic protection gate' {
     $result = Invoke-BlockConfiguration
     $result.Success | Should Be $true
     $result.Message | Should Match 'actual DeviceAdd path verified'
+  }
+}
+
+Describe 'degdid network-state and session ambiguity' {
+  It 'treats any up adapter as potentially online without requiring a default route' {
+    Mock Get-NetAdapter {
+      [pscustomobject]@{ Status = 'Up' }
+    }
+    (Test-LooksOnline) | Should Be $true
+  }
+
+  It 'fails closed when adapter state cannot be inspected' {
+    Mock Get-NetAdapter { throw 'provider failed' }
+    { Test-LooksOnline } | Should Throw
+  }
+
+  It 'fails closed when an Explorer session owner cannot be inspected' {
+    Mock Get-CimInstance {
+      [pscustomobject]@{ SessionId = 1 }
+    }
+    Mock Invoke-CimMethod { throw 'owner unavailable' }
+    {
+      Get-TargetExplorerSessionCount -TargetSid 'S-1-5-21-test'
+    } | Should Throw
+  }
+
+  It 'fails closed when GetOwnerSid returns an error code without throwing' {
+    Mock Get-CimInstance {
+      [pscustomobject]@{ SessionId = 2 }
+    }
+    Mock Invoke-CimMethod {
+      [pscustomobject]@{
+        ReturnValue = 2
+        Sid = $null
+      }
+    }
+    {
+      Get-TargetExplorerSessionCount -TargetSid 'S-1-5-21-test'
+    } | Should Throw
+  }
+
+  It 'refuses ambiguous same-user interactive credential sessions' {
+    $sid = (
+      [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    ).User.Value
+    $target = [pscustomobject]@{
+      Sid = $sid
+      Resolution = 'InteractiveConsole'
+      InteractiveSessionCount = 2
+    }
+    (Get-TargetCredentialAccessMode -Target $target) | Should Be 'Unavailable'
+  }
+
+  It 'uses the sole interactive session instead of an authenticated background session' {
+    $sid = (
+      [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    ).User.Value
+    $target = [pscustomobject]@{
+      Sid = $sid
+      Resolution = 'AuthenticatedSoleProfile'
+      InteractiveSessionCount = 1
+    }
+    Mock Test-IsAdministrator { $true }
+    (Get-TargetCredentialAccessMode -Target $target) |
+      Should Be 'InteractiveTask'
+  }
+
+  It 'uses the authenticated session only when no interactive session exists' {
+    $sid = (
+      [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    ).User.Value
+    $target = [pscustomobject]@{
+      Sid = $sid
+      Resolution = 'AuthenticatedSoleProfile'
+      InteractiveSessionCount = 0
+    }
+    (Get-TargetCredentialAccessMode -Target $target) |
+      Should Be 'DirectCurrentSession'
   }
 }
 
@@ -514,6 +587,36 @@ Describe 'degdid wipe postcondition' {
     ($result.Reasons -contains 'An MSA device credential remains.') |
       Should Be $true
   }
+
+  It 'rejects a wipe when a machine DeviceIdentities root remains' {
+    $inventory = [pscustomobject]@{
+      Errors = @()
+      AllRealPuids = @()
+      ActiveRealPuids = @()
+      ResidualRealPuids = @()
+      Entries = @()
+      PropertyValues = @()
+      TokenKeys = @()
+      CacheArtifacts = @()
+      CredentialInspectionAvailable = $true
+      DeviceCredentials = @()
+      DeviceIdentityArtifacts = @(
+        [pscustomobject]@{
+          Name = 'SystemDeviceIdentity'
+          Path = 'Registry::HKEY_USERS\S-1-5-18\...\S-1-5-18'
+        }
+      )
+    }
+    $result = Test-WipePostcondition `
+      -Inventory $inventory `
+      -CapturedPuids @() `
+      -Mode Wipe `
+      -DecoyLid $null `
+      -Model $model
+    $result.Success | Should Be $false
+    ($result.Reasons -contains 'A machine DeviceIdentities subtree remains.') |
+      Should Be $true
+  }
 }
 
 Describe 'degdid mutation preflight' {
@@ -566,7 +669,7 @@ Describe 'degdid profile topology' {
 }
 
 Describe 'degdid machine and user identity source model' {
-  It 'covers LID, Property, and Token stores in all three hives' {
+  It 'covers all three hives and machine DeviceIdentities roots' {
     Mock Get-TargetLocalAppData {
       [pscustomobject]@{
         Path = 'C:\Users\Test\AppData\Local'
@@ -587,6 +690,7 @@ Describe 'degdid machine and user identity source model' {
     $model.Lids.Count | Should Be 3
     $model.Properties.Count | Should Be 3
     $model.Tokens.Count | Should Be 3
+    $model.DeviceIdentityPaths.Count | Should Be 2
     ($model.Properties.Name -join ',') |
       Should Be 'TargetUserProperty,DefaultProperty,SystemProperty'
     ($model.Tokens.Name -join ',') |
@@ -698,6 +802,36 @@ Describe 'degdid operation ledger scoping' {
   }
 }
 
+Describe 'degdid robust service quiescence' {
+  It 'temporarily disables a busy wlidsvc and restores its startup mode' {
+    $state = [pscustomobject]@{
+      Name = 'wlidsvc'
+      StartType = 'Manual'
+      TemporarilyDisabled = $false
+    }
+    $script:waitCall = 0
+    Mock Get-Service {
+      [pscustomobject]@{ Status = 'Running' }
+    }
+    Mock Stop-Service { throw 'service stop failed' }
+    Mock Wait-GdidServiceStopped {
+      $script:waitCall++
+      return $script:waitCall -ge 2
+    }
+    Mock Set-Service {}
+    Mock Invoke-GdidScStop { 'STOP_PENDING' }
+
+    { Stop-GdidServiceRobust -State $state } | Should Not Throw
+    $state.TemporarilyDisabled | Should Be $true
+    Assert-MockCalled Set-Service 1 -Scope It
+    Assert-MockCalled Invoke-GdidScStop 1 -Scope It
+
+    Restore-GdidServiceStartType -State $state
+    $state.TemporarilyDisabled | Should Be $false
+    Assert-MockCalled Set-Service 2 -Scope It
+  }
+}
+
 Describe 'degdid MSA device credential cleanup' {
   It 'removes each present targeted device credential' {
     $results = New-Object System.Collections.Generic.List[object]
@@ -768,6 +902,44 @@ Describe 'degdid MSA device credential cleanup' {
     Assert-MockCalled Invoke-TargetDeviceCredentialOperation 1 -Scope It
     Assert-MockCalled Invoke-SystemDeviceCredentialOperation 1 -Scope It
     @($results | Where-Object { -not $_.Success }).Count | Should Be 0
+  }
+
+  It 'treats an already-removed DeviceIdentities alias as success' {
+    $results = New-Object System.Collections.Generic.List[object]
+    $script:pathCheck = 0
+    $before = [pscustomobject]@{
+      PropertyValues = @()
+      TokenKeys = @()
+      DeviceCredentials = @()
+      CredentialInspectionAvailable = $false
+      TargetCredentialInspectionAvailable = $false
+      SystemCredentialInspectionAvailable = $false
+      NegativeCacheKeys = @()
+      DeviceIdentityArtifacts = @(
+        [pscustomobject]@{ Name = 'Default'; Path = 'Registry::first' },
+        [pscustomobject]@{ Name = 'System'; Path = 'Registry::alias' }
+      )
+    }
+    $model = [pscustomobject]@{
+      Lids = @()
+      CachePaths = @()
+    }
+    Mock Test-Path {
+      $script:pathCheck++
+      return $script:pathCheck -eq 1
+    }
+    Mock Remove-Item {}
+
+    Invoke-IdentityStoreChanges `
+      -Model $model `
+      -Before $before `
+      -CapturedPuids @() `
+      -Mode Wipe `
+      -DecoyLid $null `
+      -Results $results
+
+    @($results | Where-Object { -not $_.Success }).Count | Should Be 0
+    Assert-MockCalled Remove-Item 1 -Scope It
   }
 }
 

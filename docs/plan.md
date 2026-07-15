@@ -25,7 +25,7 @@ The research track is intentionally broader than the shipped tool. `degdid.ps1` 
 ### Tool scope
 
 - Inspect the supported environment and known GDID stores
-- Redact identifiers by default and expose explicit human/JSON status modes
+- Show local identifiers clearly in human and JSON status output
 - Apply a canonical dual-stack hosts region
 - Verify canonical dual-stack hosts and the actual DeviceAdd path; add/report FQDN and `wlidsvc` firewall controls when policy permits
 - Verify the mint path independently before identity mutation
@@ -87,7 +87,7 @@ The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from s
 ### Tool implementation
 
 - [x] Explicit supported-target preflight and refusal reasons
-- [x] Human-readable full Status, explicit `-Redact`, and detailed `-Json`
+- [x] Human-readable full Status and detailed `-Json`
 - [x] Exact verdict oracle: `Error`, `UnsupportedEnvironment`, `RealGdidPresent`, `BlockDegraded`, `ProtectedNoRealGdid`
 - [x] Canonical IPv4/IPv6 hosts region with safe parsing and atomic replacement
 - [x] Auto-resolving FQDN dynamic-keyword firewall rule
@@ -115,8 +115,9 @@ The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from s
 Implementation completion and end-to-end lab validation are separate states. The first is complete; the second is not.
 
 `EXP-G` exposed two delayed local machine rehydrate layers—machine-hive
-Property/Token state and SYSTEM `didlogical`—then passed the accepted eight-hour
-threshold after both were cleared. EXP-H independently confirmed the target-user
+Property/Token state and SYSTEM `didlogical`—then remained clean beyond 33 hours
+after both were cleared, exceeding the original 24-hour criterion. EXP-H
+independently confirmed the target-user
 MSA credential layer and later matched the same machine gap. Remaining work is the
 clean never-mint clone, discrete transition/recovery cases, and final MSA-machine
 reboot/persistence confirmation. MSA UI usability remains separate compatibility
@@ -195,8 +196,8 @@ The preferred contaminated path is `-Protect`, which means continuous block plus
 Run from disposable snapshots and record exact timestamps:
 
 1. **Eligibility matrix:** supported local single-loaded-target guest; then domain, Entra, MDM, multiple-loaded-profile, no-target, and unloaded-hive refusal cases. Dormant profile artifacts must warn without causing refusal. Repeat the positive path on Windows 10 22H2/build 19045 before promoting it from generic support to lab-validated support.
-2. **Block matrix:** absent, valid, stale paired, malformed, and duplicate hosts regions; missing/invalid keyword objects; missing FQDN or `wlidsvc` rule.
-3. **Status matrix:** force and capture all five exact verdicts with default redaction and `-Json`; inspect full identifiers only in private output.
+2. **Block matrix:** absent and current canonical hosts regions, plus refusal of noncanonical, malformed, and duplicate state; missing/invalid keyword objects; missing FQDN or `wlidsvc` rule.
+3. **Status matrix:** force and capture all five exact verdicts; keep raw output private and commit only identifier-free summaries.
 4. **Protect from contamination:** seed or naturally mint target-user and machine-hive state, run canonical Protect, reboot twice, and inspect immediately, at 5 minutes, 30 minutes, and 60 minutes online. Report the actual completed window; do not extrapolate beyond it.
 5. **Fail-closed transitions:** make the gate fail before writes, after writes, and during settle on disposable snapshots; verify refusal, exit code, and service state.
 6. **H5 controlled update:** start with a known pending cumulative update, scan, download, install, reboot, inspect, and retain KB/result evidence.
