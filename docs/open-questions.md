@@ -1,6 +1,6 @@
 ﻿# Open Questions
 
-Last updated: 2026-07-13
+Last updated: 2026-07-15
 
 Living backlog. Resolve with source-backed evidence; distinguish a public negative
 result from something that still needs a controlled lab capture.
@@ -26,7 +26,11 @@ the exact Stokes URL-association sensor are **not** release gates.
 - [x] Run `-Protect` against the real contaminated state shape: target-user LID,
   Property, Token/Tickets, machine residual cache, and related files. Interim
   `EXP-G` cleared that state and held through two reboots plus service/task
-  triggers.
+  triggers. A separate current-revision control restored the offline S1 snapshot
+  once, allowed a fresh natural mint, ran one Protect without checkpoint bouncing,
+  and remained clear after reboot plus ten identity-trigger checks through 497
+  seconds. The recurrence from the repeatedly restored contaminated checkpoint
+  remains a distinct lab artifact rather than evidence against that clean path.
 - [ ] Re-run EXP-H on the MSA-connected profile. The same old user LID returned
   locally after the earlier bundle cleared; targeted `SSO_POP_Device` and
   WindowsLive `didlogical` credential cleanup is now implemented. The latest field

@@ -1,6 +1,6 @@
 # EXP-G - Pending closure / hardening matrix
 
-Status: **PASS BEYOND 33 HOURS — three-hive plus target/SYSTEM credential cleanup held past the original 24-hour criterion**
+Status: **PASS BEYOND 33 HOURS + CLEAN S1 ONE-PASS CONTROL — current Protect held after a fresh natural mint, reboot, and repeated identity triggers**
 
 This began as an experiment design. The bounded interim observations below are now recorded; unexecuted rows remain pending and no longer-duration outcome is implied.
 
@@ -177,6 +177,37 @@ Pre-reboot and post-heartbeat Status both returned `ProtectedNoRealGdid`, with z
 PUIDs, tickets, target/SYSTEM device credentials, and cache entries. The canonical
 hosts and actual DeviceAdd path remained healthy after reboot.
 
+## Clean S1 one-pass control — 2026-07-15
+
+To separate current-script behavior from the repeatedly restored contaminated
+checkpoint, the lab returned to the offline S1 snapshot exactly once and did not
+bounce between checkpoints afterward.
+
+- Before network attachment, no readable PUID was present and the canonical blocks
+  were absent. Status still treated unresolved opaque identity state in the old
+  snapshot as an error rather than claiming a clean state.
+- After attaching the Default Switch and starting the identity services/tasks, one
+  real PUID appeared naturally in two LID stores after approximately one second.
+- The current `-Protect` was run exactly once on that same timeline. It captured one
+  real PUID, completed all 35 recorded operations without failure, and immediately
+  returned `ProtectedNoRealGdid`.
+- The immediate postcondition contained zero PUIDs, machine DeviceIdentities roots,
+  DeviceTickets, or target/SYSTEM device credentials.
+- After a normal guest reboot, Status again returned `ProtectedNoRealGdid` with all
+  four counts still zero.
+- Ten further observation cycles repeatedly started `wlidsvc`/`CDPSvc`, invoked the
+  available DeviceDirectoryClient and Device Information registration tasks, and
+  checked full Status. The final check at 497 seconds remained
+  `ProtectedNoRealGdid`, with all four counts at zero.
+
+This is a current-revision one-pass result from a freshly and naturally minted S1
+control. It does not reproduce or explain the earlier recurrence from the heavily
+contaminated minted checkpoint, and it does not replace the separate 33-hour
+duration evidence or the pending MSA-connected EXP-H rerun. It does show that the
+current conservative DeviceIdentities cleanup is sufficient for the clean S1 mint
+path exercised here; no further speculative source deletion is justified by this
+run.
+
 ## Closure rule
 
 G2 is closed for the measured 33-hour bounded window. Remaining discrete matrix
@@ -186,5 +217,9 @@ G6 is optional expansion to 24H2. G9 is optional, but H5 remains partial until a
 controlled pending CU is exercised. G10 is optional research because the public
 tool already clears the full conservative bundle; Immersive Property remains a
 required/high-confidence member without a unique-cause claim.
+
+The clean S1 control also passes the current one-Protect natural-mint/reboot/trigger
+path. The contaminated-checkpoint recurrence remains a distinct unresolved lab
+artifact and is not used to weaken or inflate that bounded result.
 
 Unlisted rows remain **NOT RUN / pending**.
