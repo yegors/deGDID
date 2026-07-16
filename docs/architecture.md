@@ -1,6 +1,6 @@
 # GDID Architecture — Generation, Lifecycle, Correlation
 
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 Confidence tags: `[COURT]` `[MSDOC]` `[STATIC]` `[LAB]` `[CITED-RE]` `[OBSERVED]` `[ASSESSED]`; see `glossary.md`.
 
 ## Executive model
@@ -180,8 +180,10 @@ at a time. Unique causality remains unproven.
 `[OBSERVED]` EXP-H added an MSA-specific boundary: after the earlier
 Property/Token/LID/file-cache bundle was cleared under healthy blocks, the same old
 target-user LID returned alone. The profile still had device Credential Manager
-entries. The tool now clears those targeted device credentials; confirmation rerun
-is pending before calling them the proven source.
+entries. Targeted cleanup then kept the user path clear while a separate machine
+PUID returned, and the final complete current-revision run remained protected
+through sign-out/in, sleep/resume, reboot, and 18 hours. This supports those device
+credentials as a target-user rehydrate input without claiming a one-store ablation.
 
 Also observed on a typical online install (`[LAB]`):
 

@@ -1,6 +1,6 @@
 ﻿# degdid - High-Level Plan
 
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 
 ## Purpose
 
@@ -97,31 +97,36 @@ The tool recognizes `0018`-shaped PUIDs but cannot prove their provenance from s
 - [x] Experimental Decoy mode
 - [x] Fail-closed Protect sequencing
 - [x] Recovery-safe Unblock for degdid-owned state
-- [x] Pure helper tests for hosts handling, redaction, verdicts, postconditions, and preflight precedence
+- [x] Focused tests for the public interface, hosts handling, verdicts, postconditions, preflight, service sequencing, and credential cleanup
 
 ### Release validation
 
-- [ ] Run the exact current rewrite end to end on a supported clean Windows 11 guest
-- [ ] Run the Windows 10 22H2/build-19045 compatibility and refusal matrix
-- [ ] Run the exact current rewrite on a guest contaminated in machine and target-user stores
-- [ ] Re-run EXP-H on the MSA-connected profile after targeted device-credential cleanup
-- [ ] Exercise every Status verdict against controlled state
-- [ ] Verify dynamic-keyword FQDN and `wlidsvc` rules on the guest firewall
-- [ ] Verify fail-closed behavior at each block-gate transition
-- [ ] Verify Unblock after profile/topology changes and malformed-marker refusal
-- [ ] Install a known pending cumulative update under the gate
-- [ ] Complete the Store/MSA/Xbox/Phone Link/Edge-sync UI matrix
+- [x] Run the exact current rewrite end to end on a supported clean Windows 11 guest
+- [ ] Run the Windows 10 22H2/build-19045 compatibility and refusal matrix, or narrow the accepted build contract
+- [x] Run the exact current rewrite on naturally minted and fully contaminated machine/target-user states
+- [x] Re-run EXP-H on the MSA-connected profile through sign-out/in, sleep/resume, reboot, and 18 hours
+- [x] Exercise every Status verdict through focused tests and controlled observed states
+- [x] Verify dynamic-keyword FQDN and `wlidsvc` rules on the guest firewall
+- [x] Verify fail-closed sequencing through naturally encountered failures and focused transition tests
 
-Implementation completion and end-to-end lab validation are separate states. The first is complete; the second is not.
+The disposable-guest Unblock/topology and malformed-hosts integration matrix is
+explicitly deferred rather than represented as passed. Focused tests cover the
+owned-state and refusal logic. Controlled cumulative updates, the broader identity
+UI matrix, and feature updates are compatibility follow-up work, not gates for the
+narrow GDID-only claim.
 
-`EXP-G` exposed two delayed local machine rehydrate layers—machine-hive
-Property/Token state and SYSTEM `didlogical`—then remained clean beyond 33 hours
-after both were cleared, exceeding the original 24-hour criterion. EXP-H
-independently confirmed the target-user
-MSA credential layer and later matched the same machine gap. Remaining work is the
-clean never-mint clone, discrete transition/recovery cases, and final MSA-machine
-reboot/persistence confirmation. MSA UI usability remains separate compatibility
-work.
+Implementation and exact-revision end-to-end validation are complete for the
+measured Windows 11 25H2/build-26200 scope. Other accepted builds remain warning
+paths until separately validated.
+
+`EXP-G` exposed delayed machine-hive Property/Token, DeviceIdentities, and SYSTEM
+credential layers, then remained clean beyond 33 hours after the complete
+conservative cleanup. It also passed fresh-mint Protect, Unblock/remint, reprotect,
+reboot, and repeated identity-trigger controls. The original offline/pre-block
+series already covered first-online prevention. `EXP-H` independently confirmed
+the target-user MSA credential layer; the final current-revision field run remained
+protected through sign-out/in, sleep/resume, reboot, and 18 hours. MSA UI usability
+and cross-build compatibility remain separate work.
 
 ## Phase 0 - Foundations
 
@@ -157,30 +162,30 @@ Environment: Hyper-V Windows 11 25H2 build 26200, local account, no MSA. The obs
 | Hypothesis | Evidence status | Observed window and limitation |
 |------------|-----------------|--------------------------------|
 | H1: offline OOBE has no GDID | **Supported** by EXP-A1 | Point-in-time first-desktop inventory with NIC disconnected. |
-| H2: pre-blocking prevents first mint | **Partial** via EXP-A4 | No PUID after service bounce and about 90 seconds online. This does not establish indefinite protection or validate the current complete firewall gate. |
-| H3: local cleanup can remove readable GDID state | **Supported for tested stores** by EXP-C/C3 | Expanded bundle succeeded; inventory is not claimed exhaustive. |
-| H4: cleanup plus continuous block survives reboot | **Partial** via EXP-C3 | Empty after reboot and about four minutes of forced-service soak. Longer validation is pending. |
+| H2: pre-blocking prevents first mint | **Supported for the measured build-26200 path** | EXP-A4 blocked before first online and remained empty through the exercised service window; later current-gate runs held the same DeviceAdd barrier through longer reboot/trigger windows. No indefinite claim. |
+| H3: local cleanup can remove readable GDID state | **Supported for tested stores** by EXP-G/H | Current Protect cleared naturally minted, contaminated local-account, and MSA-connected state; inventory is not claimed exhaustive. |
+| H4: cleanup plus continuous block survives reboot | **Supported for measured windows** | EXP-G exceeded 33 hours with repeated triggers/reboots; EXP-H passed reboot, session/power transitions, and 18 hours. |
 | H5: Windows Update works under the block | **Partial** via EXP-D | COM scan with zero pending updates, Defender signature update, and successful prior blocked-period history. No controlled pending cumulative update was installed during EXP-D. |
 | H6: compatibility impact is cataloged | **Partial/inferred** via EXP-E | Desktop, scan, and Defender were exercised. Store/MSA/Xbox/Phone Link/Edge-sync UI workflows were not. |
-| H7: wipe without blocks triggers server remint | **Not directly validated** | EXP-B was a first mint after unblocking a never-minted image, not wipe-then-remint. |
+| H7: wipe without blocks permits server remint | **Directly observed** | EXP-G completed Protect/wipe -> Unblock -> rebooted remint in 22 seconds under identity triggers -> reprotect -> clean reboot. The latency is not universal. |
 | H8: feature update preserves the protected state | **Not run** | Deferred to a disposable snapshot. |
 
 Additional evidence:
 
 - EXP-C2 proved that naive LID-only cleanup can rehydrate the same HKCU PUID while hosts remain blocked.
 - EXP-C3 identified Immersive `Property\<PUID>` and parallel Token state as members of the successful expanded cleanup bundle. No controlled ablation established one unique restore source.
-- EXP-F was nuanced: a decoy was not replaced during about six minutes unblocked, and an unblocked wipe stayed empty for about five to six minutes on the exercised image. This does not prove eventual remint or durable safety.
+- EXP-F was nuanced: its original short unblocked trials did not remint. EXP-G later supplied the direct triggered wipe/protect -> Unblock -> rebooted-remint control.
 
 Full notes remain under `docs/experiments/`.
 
 ## Phase 3 - Implemented hardening
 
-Status: implemented in root `degdid.ps1`; exact-revision guest validation is in
-progress, with immediate Protect and two reboots passing in interim `EXP-G`.
+Status: implemented in root `degdid.ps1`; exact-revision guest validation is
+complete for the measured Windows 11 25H2/build-26200 scope in EXP-G/H.
 
 | Layer | Implementation | Purpose |
 |-------|----------------|---------|
-| **Inspect** | Status environment, target, hosts, firewall, mint path, active stores, residual caches | Produce one explicit verdict without exposing identifiers by default |
+| **Inspect** | Status environment, target, hosts, firewall, mint path, active stores, residual caches | Produce one explicit verdict with full local identifiers for diagnosis |
 | **Prevent** | Offline OOBE, then `-Block` before first network access | Avoid first DeviceAdd after a local profile exists |
 | **Block** | Required dual-stack hosts + actual DeviceAdd path test; optional/reportable FQDN and `wlidsvc` firewall layers | Keep the mint path unavailable without demanding one exact firewall topology |
 | **Wipe** | Clear known active and matching residual state, caches, and tickets | Canonical local removal path |
@@ -191,19 +196,19 @@ progress, with immediate Protect and two reboots passing in interim `EXP-G`.
 
 The preferred contaminated path is `-Protect`, which means continuous block plus canonical Wipe. Decoy is not the preferred user path.
 
-## Phase 4 - Exact-revision validation plan
+## Phase 4 - Exact-revision validation matrix
 
 Run from disposable snapshots and record exact timestamps:
 
-1. **Eligibility matrix:** supported local single-loaded-target guest; then domain, Entra, MDM, multiple-loaded-profile, no-target, and unloaded-hive refusal cases. Dormant profile artifacts must warn without causing refusal. Repeat the positive path on Windows 10 22H2/build 19045 before promoting it from generic support to lab-validated support.
-2. **Block matrix:** absent and current canonical hosts regions, plus refusal of noncanonical, malformed, and duplicate state; missing/invalid keyword objects; missing FQDN or `wlidsvc` rule.
-3. **Status matrix:** force and capture all five exact verdicts; keep raw output private and commit only identifier-free summaries.
-4. **Protect from contamination:** seed or naturally mint target-user and machine-hive state, run canonical Protect, reboot twice, and inspect immediately, at 5 minutes, 30 minutes, and 60 minutes online. Report the actual completed window; do not extrapolate beyond it.
-5. **Fail-closed transitions:** make the gate fail before writes, after writes, and during settle on disposable snapshots; verify refusal, exit code, and service state.
-6. **H5 controlled update:** start with a known pending cumulative update, scan, download, install, reboot, inspect, and retain KB/result evidence.
-7. **H6 UI catalog:** exercise Store free-app download, Settings MSA sign-in, Xbox login, Phone Link pairing, OneDrive MSA sign-in if present, Edge sync, activation status, and non-MSA browsing.
-8. **H7 direct test:** from a freshly contaminated snapshot, Wipe while protected, Unblock, invoke a defined DeviceAdd-capable client, and observe at stated intervals. Keep this separate from EXP-B first mint.
-9. **Recovery:** run Unblock after the guest becomes unsupported and confirm only degdid-owned state is removed; separately verify malformed-marker refusal.
+1. **Eligibility matrix:** implemented and focused-test covered for target resolution, build boundaries, and ambiguous profiles. Windows 10 remains generic/warned rather than lab validated.
+2. **Block matrix:** canonical hosts, malformed/noncanonical refusal, dynamic keywords, service rules, and actual mint-path checks are covered by focused tests and build-26200 runs.
+3. **Status matrix:** all five exact verdicts are covered; repository evidence remains identifier-free.
+4. **Protect from contamination:** complete for naturally minted and contaminated local-account state through EXP-G, including the beyond-33-hour window.
+5. **Fail-closed transitions:** naturally encountered pre-write failures and focused transition tests cover the shipped sequencing; no claim is made that every possible Windows failure was injected in a guest.
+6. **MSA persistence:** complete for the EXP-H build-26200 field machine through sign-out/in, sleep/resume, reboot, and 18 hours.
+7. **H7 direct test:** complete in EXP-G via Protect/wipe -> Unblock -> rebooted remint -> reprotect -> clean reboot.
+8. **Recovery integration:** explicitly deferred. Owned-state and malformed-hosts behavior remains focused-test covered, not guest-matrix validated.
+9. **Compatibility follow-up:** controlled pending CU, broader MSA/Store/Xbox/Phone Link/OneDrive/Edge UI, and feature-update work remain optional.
 
 Optional lower-priority work:
 
@@ -226,17 +231,16 @@ Optional lower-priority work:
 
 ## Near-term actions
 
-1. Validate the exact current rewrite end to end on a supported VM.
-2. Run the Windows 10 22H2/build-19045 closure matrix.
-3. Run the controlled pending cumulative-update test.
-4. Complete the UI compatibility matrix.
-5. Run direct H7 wipe-then-unblock validation.
-6. Publish only claims supported by those recorded windows.
+1. Run the Windows 10 22H2/build-19045 closure matrix, or narrow the accepted build contract.
+2. Optionally run the controlled pending cumulative-update test.
+3. Optionally expand the identity-feature UI compatibility matrix.
+4. Publish only claims supported by the recorded build and observation windows.
 
 ## Document index
 
 | File | Role |
 |------|------|
+| `docs/usage.md` | Human-facing commands, verdicts, exit codes, and recovery |
 | `docs/plan.md` | Scope, implementation state, and validation backlog |
 | `docs/lab-playbook.md` | Exact-revision VM runbook and historical evidence |
 | `docs/countermeasures.md` | Operational controls, gate semantics, and residual risk |

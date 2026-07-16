@@ -2,7 +2,7 @@
 
 Date: 2026-07-11  
 Follows: EXP-C3 clean empty + decoy under blocks
-Status: **`[OBSERVED]` short-window unblock behavior; wipe-remint not proven**
+Status: **`[OBSERVED]` original short-window negative; later wipe-remint control passed in EXP-G**
 
 ## Protocol
 
@@ -30,9 +30,27 @@ Cross-check: **EXP-B** observed first-chance mint after unblocking the never-min
 3. **First-chance server mint is real** in EXP-B's eager, never-minted state. EXP-B is a mint control, not evidence that a previously minted-and-wiped image remints.
 4. **Practical:** Keep **blocks** if the goal is "no new real GDID." Decoy/wipe without blocks is **not** a guarantee against eventual remint; it is also **not** an instant remint timer.
 
+## 2026-07-15 follow-up
+
+EXP-G later exercised the missing direct control on the same current-revision VM
+timeline: Protect/wipe, reboot clean, Unblock, reboot unblocked, observe a real PUID
+return, Protect again, and reboot clean again.
+
+The unblocked reboot produced a real PUID after 22 seconds while identity services
+and registration tasks were exercised. The state included two LID stores, two
+machine DeviceIdentities roots, and two DeviceTickets. The subsequent Protect
+captured two real PUIDs, completed all 37 operations without failure, and remained
+`ProtectedNoRealGdid` after the final reboot.
+
+This closes the direct wipe -> unblock -> remint observation gap. It does not
+contradict the original F2 negative: remint is client/trigger dependent, and the
+22-second triggered result is not a universal timer.
+
 ## Explicit non-claims
 
-- Did not prove multi-hour/day remint latency after decoy unblock.
-- Did not observe or prove wipe -> remint; the H7 wipe-remint hypothesis remains open.
+- The original EXP-F run did not prove multi-hour/day remint latency after decoy
+  unblock.
+- The original F2 window did not observe wipe -> remint; the later EXP-G follow-up
+  did observe it under an unblocked reboot plus identity triggers.
 - Did not run opaque GDID-Changer binaries; online rotate = clear state + allow DeviceAdd (EXP-B class).
 - Feature-update under blocks and firewall-only minimum left deferred (low ROI vs hosts block set already validated).

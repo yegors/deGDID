@@ -1,7 +1,7 @@
 # EXP-H - MSA profile local LID rehydrate
 
-Date: 2026-07-12  
-Evidence: **user-provided field run; target-user remediation passed; machine cleanup blocked by busy wlidsvc; robust-stop rerun pending**
+Date: 2026-07-12 to 2026-07-16
+Evidence: **PASS AT 18 HOURS — current Protect remained clean through reboot, sign-out/in, and sleep/resume on the MSA-connected profile**
 
 ## Environment
 
@@ -53,14 +53,16 @@ UAC elevation uses a different credential logon session, an elevated run uses a
 short-lived limited scheduled task in the target interactive session rather than
 assuming equal SIDs share Credential Manager state.
 
-## Pending
+## Final-rerun criteria
 
-- Re-run `-Protect` on the reporting MSA machine with the updated script.
-- Confirm both device credential targets are absent after settle.
-- Confirm `ProtectedNoRealGdid` immediately and after reboot/service triggers.
-- If the same LID still returns, enable the registry audit helper before broadening
-  cleanup into MSA account properties. Do not delete user-account identity stores
-  speculatively.
+- [x] Re-run `-Protect` on the reporting MSA machine with the updated script.
+- [x] Confirm the targeted device credentials and known GDID state are absent
+  through the `ProtectedNoRealGdid` postcondition.
+- [x] Confirm `ProtectedNoRealGdid` after reboot, sign-out/in, and sleep/resume.
+- [x] Exceed the earlier approximately 20-minute MSA-machine return window.
+
+The conditional registry-audit escalation was not needed because the same LID did
+not return. User-account identity properties were not broadened or deleted.
 
 ## Second field attempt — staging-rule false refusal
 
@@ -96,7 +98,8 @@ separates the two causes: target-user MSA rehydrate was fixed; machine identity 
 the same delayed machine-hive/SYSTEM-credential gaps found independently in EXP-G.
 
 The current script now applies the EXP-G three-hive and SYSTEM Credential Manager
-cleanup to this case as well. A final MSA-machine rerun/reboot remains pending.
+cleanup to this case as well. At this stage a final MSA-machine rerun/reboot
+remained pending; the completed result is recorded below.
 
 ## Fourth field attempt — busy wlidsvc refused normal stop
 
@@ -116,4 +119,25 @@ fail-closed behavior was correct.
 The service quiesce path now waits through stop-pending, then—only for busy
 `wlidsvc`—temporarily sets startup to Disabled, retries via SCM, and restores the
 original startup type before normal resume. It does not terminate the shared
-`svchost` process or indiscriminately stop dependencies. Rerun remains pending.
+`svchost` process or indiscriminately stop dependencies. At this stage the rerun
+remained pending.
+
+## Final field rerun — PASS at 18 hours
+
+The reporting MSA-connected machine ran the current Protect revision successfully.
+Status reported `ProtectedNoRealGdid` after the wipe and remained protected through:
+
+- sign-out and sign-in;
+- sleep and resume;
+- a normal reboot; and
+- the final check 18 hours after Protect.
+
+This exceeds the earlier approximately 20-minute MSA-machine return and both
+approximately seven-to-eight-hour machine rehydrate windows found during EXP-G.
+Together with EXP-G's separate beyond-33-hour local-account result, it closes the
+known target-user credential and machine-state rehydrate paths for the measured
+Windows 11 25H2/build-26200 scenarios.
+
+This field result validates the current overall quiesce/cleanup path. It does not
+claim that the bounded `wlidsvc` disable/SCM fallback branch itself activated during
+this successful run; that branch remains covered by focused tests.

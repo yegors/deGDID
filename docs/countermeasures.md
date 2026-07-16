@@ -1,8 +1,10 @@
 ﻿# Countermeasures - Implemented Gate and Evidence
 
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 
-Status: the hardened control path is implemented in root `degdid.ps1`. Historical Windows 11 25H2 build 26200 experiments support parts of the design, but the exact current rewrite has not yet completed an end-to-end guest validation pass.
+Status: the hardened control path is implemented in root `degdid.ps1` and has
+completed end-to-end local-account and MSA-connected validation for the measured
+Windows 11 25H2/build-26200 scope.
 
 ## Objective
 
@@ -47,7 +49,7 @@ No compatibility claim in this document applies to domain, Entra, MDM, or simult
 | P1 | Offline OOBE, then block before first network access | Preferred prevention path | Current script needs a completed local profile and loaded interactive hive |
 | P2 | Continuous verified DeviceAdd block | Required ongoing control | Identity and CDP workflows are expected to break; controls can drift |
 | P3 | Expanded Wipe under a verified block | Canonical contaminated-system mutation | Known-store model is bounded; Microsoft history remains |
-| P4 | `-Protect` = P2 then P3 | Preferred end-user path | Exact current rewrite still needs end-to-end VM validation |
+| P4 | `-Protect` = P2 then P3 | Preferred end-user path | Build-specific validation currently covers Windows 11 25H2/build 26200 |
 | P5 | Local Decoy under a verified block | Experimental research path | Shape alone cannot prove local provenance; not a clean Status completion |
 | P6 | Unblock degdid-owned network state | Recovery path | A future DeviceAdd can mint a real PUID |
 
@@ -71,7 +73,9 @@ An upstream gateway block can cover earlier setup traffic, but it is outside the
 - `[OBSERVED]` EXP-A4: applying the then-current hosts block before first network access kept the inspected stores empty through a service bounce and about 90 seconds online; LiveId reported `0x800704CF`.
 - `[OBSERVED]` EXP-B: removing those blocks from the never-minted image allowed a first machine-hive PUID to appear in about two minutes without MSA sign-in.
 
-EXP-A4 is a short hosts-era observation. It does not prove indefinite prevention or validate the current dual-stack/path-verification implementation.
+EXP-A4 is the direct pre-first-online observation. Later EXP-G/H runs validate the
+current dual-stack/path-verification barrier across longer reboot, trigger, and
+session/power windows. No finite run proves indefinite prevention.
 
 ## P2 - Continuous DeviceAdd block
 
@@ -280,31 +284,31 @@ Because Decoy is `0018`-shaped, it can correctly yield `RealGdidPresent`. That v
 |------------|----------------|---------------------|
 | EXP-A1 | Observed | No PUID in inspected stores at offline first desktop. |
 | EXP-A4 | Partial H2 | Pre-network hosts block prevented mint for about 90 seconds through a service bounce. |
-| EXP-B | First-mint control | Never-minted image produced a machine-hive PUID about two minutes after unblock without MSA. It is not H7 wipe-remint evidence. |
+| EXP-B | First-mint control | Never-minted image produced a machine-hive PUID about two minutes after unblock without MSA. Direct wipe/remint evidence is recorded separately in EXP-G. |
 | EXP-C | Observed, limited shape | Machine-hive-only cleanup plus hosts block stayed empty in its tested short window and reboot. |
 | EXP-C2 | Observed failure | Naive LID-only wipe did not clear target-user continuity. |
 | EXP-C3 | Partial H3/H4 | Expanded bundle plus continuous hosts block stayed empty across reboot and about four minutes of forced-service soak. |
 | EXP-D | **Partial H5** | Zero-pending WU scan, Defender update, successful prior blocked-period history, and no mint; no controlled pending CU installation during D. |
 | EXP-E | **Partial/inferred H6** | Desktop, WU scan, Defender, and blocked LiveId path observed; most Store/Xbox/Phone Link behavior inferred, not UI-exercised. |
-| EXP-F | Nuanced | No replacement/remint during approximately five-to-six-minute unblocked trials on the exercised image; no long-window conclusion. |
-| EXP-G | Delayed-rehydrate threshold PASS | Two machine-local gaps were found and fixed; final three-hive + target/SYSTEM credential cleanup stayed `ProtectedNoRealGdid` beyond 33 hours. |
-| EXP-H | Target-user remediation passed; persistence pending | MSA user credential cleanup passed immediately; later machine return matched EXP-G gaps now covered by the current script. |
+| EXP-F | Nuanced original negative + follow-up | No remint during the original short trials; EXP-G later supplied the direct triggered wipe/protect -> Unblock -> rebooted-remint control. |
+| EXP-G | Delayed-rehydrate and lifecycle PASS | Current conservative cleanup stayed `ProtectedNoRealGdid` beyond 33 hours and passed fresh mint, remint, reprotect, reboot, and repeated trigger controls. |
+| EXP-H | MSA-connected PASS at 18 hours | Current Protect remained protected through sign-out/in, sleep/resume, reboot, and 18 hours, exceeding the earlier user and machine return windows. |
 
-## Validation still pending
+## Remaining validation boundaries
 
-EXP-G exceeded the original 24-hour delayed-rehydrate criterion on the validated
-25H2 guest, remaining clean beyond 33 hours. Remaining closure work:
+EXP-G exceeded the original 24-hour criterion and EXP-H closed the MSA
+session/power/persistence path for the validated build. Remaining work does not
+block the narrow build-26200 GDID-only gate:
 
-- remaining session/power and recovery-Unblock transitions
-- final EXP-H MSA-machine rerun/reboot using all three hive and credential scopes
-- all five Status verdicts against controlled states
-- remaining injected fail-closed transitions and recovery-Unblock matrix
-- FQDN hydration behavior beyond the observed unhydrated hosts-sink configuration
-- Controlled installation of a known pending cumulative update
-- Store/MSA/Xbox/Phone Link/OneDrive/Edge-sync UI checks
-- Direct H7 wipe-then-unblock remint test with a defined DeviceAdd-capable client
-- Feature update on a disposable snapshot
-- Immersive Property versus Token/cache ablation if unique-source attribution is required
+- Windows 10/build-19045 and other Windows 11 lines remain accepted with warnings,
+  not build-specific lab validation;
+- the disposable-guest recovery-Unblock/malformed-hosts integration matrix is
+  deliberately deferred; focused tests cover the shipped owned-state/refusal logic;
+- FQDN hydration beyond the observed hosts-sink configuration remains optional;
+- controlled pending-CU, feature-update, and broader identity UI compatibility
+  checks remain optional; and
+- Immersive Property versus Token/cache ablation remains optional unless unique
+  source attribution becomes a claim.
 
 Future results must report the actual observation window. "Continuous" describes the required control state, not proof of indefinite effectiveness.
 

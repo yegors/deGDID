@@ -1,6 +1,6 @@
 ﻿# Lab Playbook - Exact-Revision VM Validation
 
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 
 ## Goal
 
@@ -10,7 +10,7 @@ Validate the current `degdid.ps1` implementation on disposable Windows virtual m
 - continuous DeviceAdd blocking;
 - canonical expanded Wipe;
 - fail-closed Protect sequencing;
-- redacted Status and exact verdicts;
+- full local Status inspection and exact verdicts;
 - recovery-safe Unblock;
 - optional Windows Update and feature compatibility; and
 - optional direct wipe-then-unblock remint behavior.
@@ -26,12 +26,12 @@ Historical environment: Hyper-V Windows 11 25H2 build 26200, local account, no M
 | ID | Hypothesis | Current evidence classification |
 |----|------------|---------------------------------|
 | H1 | Offline OOBE reaches first desktop without a GDID | **Supported for the observed baseline.** EXP-A1 found no PUID in target-user, `.DEFAULT`, SYSTEM, or Token stores at first desktop while offline. |
-| H2 | Blocking before first online prevents first mint | **Partial.** EXP-A4 kept the inspected stores empty through a service bounce and about 90 seconds online with the historical hosts block. No indefinite claim; current firewall controls remain to be validated. |
-| H3 | Expanded local cleanup removes readable GDID state | **Supported for the tested bundle and stores.** EXP-C/C3 cleared the observed state. The store inventory is not claimed exhaustive. |
-| H4 | Wipe plus continuous block survives reboot and service activity | **Partial.** EXP-C3 remained empty across reboot and about four minutes of forced-service soak. Longer windows remain open. |
+| H2 | Blocking before first online prevents first mint | **Supported for the measured build-26200 path.** EXP-A4 exercised pre-first-online blocking; later current-gate runs held the DeviceAdd barrier through longer reboot/trigger windows. No indefinite claim. |
+| H3 | Expanded local cleanup removes readable GDID state | **Supported for the tested bundle and stores.** EXP-G/H cleared naturally minted, contaminated local-account, and MSA-connected state. The inventory is not claimed exhaustive. |
+| H4 | Wipe plus continuous block survives reboot and service activity | **Supported for measured windows.** EXP-G exceeded 33 hours; EXP-H passed sign-out/in, sleep/resume, reboot, and 18 hours. |
 | H5 | Windows Update works under the block gate | **Partial.** EXP-D completed a WU COM scan with zero pending updates, updated Defender signatures, and showed successful prior blocked-period update history. It did not install a controlled pending cumulative update during D. |
 | H6 | Identity-feature breakage is cataloged | **Partial/inferred.** Desktop, WU scan, Defender, and blocked LiveId were observed. Store/MSA/Xbox/Phone Link/Edge-sync UI workflows were not exercised. |
-| H7 | Wipe followed by Unblock causes a new server PUID | **Not directly validated.** EXP-B was first mint after unblocking a never-minted image, not wipe-then-remint. |
+| H7 | Wipe followed by Unblock permits a new server PUID | **Directly observed.** EXP-G completed Protect/wipe -> Unblock -> rebooted remint under identity triggers -> reprotect -> clean reboot. |
 | H8 | Feature update preserves the protected state | **Not run.** Requires a disposable long-running snapshot. |
 
 Additional historical controls:
@@ -39,7 +39,7 @@ Additional historical controls:
 - EXP-B: first machine-hive PUID appeared about two minutes after blocks were removed from a never-minted online image.
 - EXP-C2: naive LID-only cleanup allowed the same target-user PUID to return after reboot while hosts remained blocked.
 - EXP-C3: clearing Immersive Property, Token fields/tickets, LID values, and caches as one bundle prevented that return in the observed window.
-- EXP-F: a decoy was not replaced during about six minutes unblocked; an unblocked wipe stayed empty for about five to six minutes on the exercised image. This is nuanced short-window evidence, not proof of durable safety or eventual remint.
+- EXP-F: the original short unblocked trials did not remint; EXP-G later supplied the direct triggered remint control. No universal remint latency is claimed.
 
 Do not convert any of these windows into "permanent" or "indefinite."
 
@@ -150,7 +150,7 @@ For each run, record:
 1. snapshot source and exact start/end timestamps;
 2. script commit or working-tree hash/diff identity;
 3. exact command line;
-4. redacted before/after Status JSON;
+4. private full before/after Status JSON plus an identifier-free repository summary;
 5. exit code and verdict;
 6. elapsed online time and reboot count;
 7. relevant event IDs and timestamps;
@@ -266,7 +266,8 @@ From `S0-clean-iso`:
 
 1. Disconnect the guest NIC before OOBE network access.
 2. Complete OOBE with one local account.
-3. At first desktop, capture redacted Status JSON.
+3. At first desktop, capture full Status JSON privately and record only an
+   identifier-free summary in the repository.
 4. Require `Environment.Supported=True`, no active/residual real-shaped PUID, and `BlockDegraded` before blocks exist.
 5. Run `.\degdid.ps1 -Block` while still offline.
 6. Capture Status and require the complete block state plus `ProtectedNoRealGdid`.
@@ -500,16 +501,18 @@ The GDID-only release validation is complete only when it produces:
 
 1. exact current-revision identity and test-environment record;
 2. supported-target and refusal matrix;
-3. all five Status verdict examples with default redaction;
+3. all five Status verdict examples, with only identifier-free summaries committed;
 4. hosts/firewall state matrix, including `wlidsvc`;
 5. canonical Protect result with stated online duration and reboot count;
 6. fail-closed transition evidence or an explicit still-pending list;
 7. a real target-user/machine contamination-shape Protect result;
-8. Unblock recovery and malformed-marker results; and
+8. an explicit disposition for any deferred integration branches; and
 9. updated countermeasure claims limited to the observed windows.
 
-The controlled cumulative update, broader UI compatibility table, direct H7
-classification, feature update, and C3 ablation remain useful follow-on research.
+The disposable-guest recovery/malformed-hosts matrix is explicitly deferred;
+focused tests cover the shipped ownership/refusal behavior. The controlled
+cumulative update, broader UI compatibility table, feature update, and C3 ablation
+remain useful follow-on research.
 They are not required to close the narrow GDID-only promise unless a corresponding
 compatibility or unique-source claim is promoted.
 

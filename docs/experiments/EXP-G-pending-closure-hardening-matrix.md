@@ -1,6 +1,6 @@
 # EXP-G - Pending closure / hardening matrix
 
-Status: **PASS BEYOND 33 HOURS + CLEAN S1 ONE-PASS CONTROL — current Protect held after a fresh natural mint, reboot, and repeated identity triggers**
+Status: **PASS BEYOND 33 HOURS + COMPLETE BUILD-26200 LIFECYCLE — fresh mint, remint/reprotect, identity triggers, MSA session/power transitions, and reboot all held**
 
 This began as an experiment design. The bounded interim observations below are now recorded; unexecuted rows remain pending and no longer-duration outcome is implied.
 
@@ -203,20 +203,53 @@ bounce between checkpoints afterward.
 This is a current-revision one-pass result from a freshly and naturally minted S1
 control. It does not reproduce or explain the earlier recurrence from the heavily
 contaminated minted checkpoint, and it does not replace the separate 33-hour
-duration evidence or the pending MSA-connected EXP-H rerun. It does show that the
+duration evidence or the separate MSA-connected EXP-H result. It does show that the
 current conservative DeviceIdentities cleanup is sufficient for the clean S1 mint
-path exercised here; no further speculative source deletion is justified by this
-run.
+path exercised here. EXP-H supplied the MSA-connected session/power and 18-hour
+persistence result; no further speculative source deletion is justified by these
+runs.
+
+### Same-timeline unblock/remint/reprotect drill
+
+The same VM timeline then completed the reverse control and another protection
+cycle without any snapshot restore:
+
+- A further protected reboot remained `ProtectedNoRealGdid`, with valid hosts and
+  DeviceAdd-path verification and zero PUIDs, DeviceIdentities roots, DeviceTickets,
+  or device credentials.
+- `-Unblock` returned `0`; hosts and managed firewall state were absent, Status
+  became `BlockDegraded`, and no PUID was present before reboot.
+- After the unblocked reboot, a real PUID returned in two LID stores after 22
+  seconds. Status reported one GDID, two machine DeviceIdentities roots, and two
+  DeviceTickets.
+- By the subsequent Protect inventory, two real PUIDs were captured. Protect
+  completed all 37 operations without failure and immediately returned
+  `ProtectedNoRealGdid`, with zero PUIDs, roots, tickets, or credentials.
+- A final normal guest reboot again returned `ProtectedNoRealGdid`; canonical hosts
+  and the actual DeviceAdd path were valid and all four identity counts remained
+  zero.
+
+This directly demonstrates wipe/protect -> unblock -> rebooted remint -> reprotect
+on a previously minted machine. The 22-second latency is specific to this triggered
+lab run, not a general remint timer.
+
+### Session and power transition confirmation
+
+The final EXP-H field run remained `ProtectedNoRealGdid` through sign-out/in,
+sleep/resume, a normal reboot, and an 18-hour protected window on the MSA-connected
+build-26200 machine. This closes G3 for the validated build and measured
+transitions.
 
 ## Closure rule
 
-G2 is closed for the measured 33-hour bounded window. Remaining discrete matrix
-work is G3 session/power transitions and a disposable-guest G8 confirmation; G7 has
-multiple real fail-closed defects plus unit coverage but not every synthetic branch.
-G6 is optional expansion to 24H2. G9 is optional, but H5 remains partial until a
-controlled pending CU is exercised. G10 is optional research because the public
-tool already clears the full conservative bundle; Immersive Property remains a
-required/high-confidence member without a unique-cause claim.
+G2 is closed for the measured 33-hour bounded window, and G3 is closed by the EXP-H
+session/power field run. G7 has multiple observed fail-closed defects plus focused
+unit coverage. A disposable-guest G8 recovery/malformed-hosts matrix was not run and
+is deliberately deferred rather than represented as passed. G6 is optional build
+expansion. G9 is optional, but H5 remains partial until a controlled pending CU is
+exercised. G10 is optional research because the public tool already clears the full
+conservative bundle; Immersive Property remains a required/high-confidence member
+without a unique-cause claim.
 
 The clean S1 control also passes the current one-Protect natural-mint/reboot/trigger
 path. The contaminated-checkpoint recurrence remains a distinct unresolved lab

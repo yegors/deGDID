@@ -1,144 +1,74 @@
 ﻿# Open Questions
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
-Living backlog. Resolve with source-backed evidence; distinguish a public negative
-result from something that still needs a controlled lab capture.
+This file contains only unresolved questions with a concrete decision or experiment.
+Completed evidence belongs in `docs/experiments/`; broad speculation is not a
+backlog.
 
-## Tool completion / release hardening
+The GDID-only gate is complete for the measured unmanaged, single-user Windows 11
+25H2/build-26200 scope. None of the research questions below blocks that result.
 
-For the supported unmanaged, single-user Windows scope, completion means:
+## 1. Build portability — product decision
 
-1. continuously block the DeviceAdd mint path; and
-2. remove known active real Device PUID state with the canonical wipe.
+**Question:** Does the current gate behave correctly on Windows 10 22H2/build 19045
+and a representative non-26200 Windows 11 build?
 
-General telemetry suppression, complete mapping of adjacent Microsoft endpoints, and
-the exact Stokes URL-association sensor are **not** release gates.
+**Why it matters:** those builds are accepted by the mutation contract but currently
+receive warnings because only build 26200 has complete lifecycle evidence.
 
-- [x] Require canonical dual-stack hosts plus actual DeviceAdd path verification.
-  Dynamic-keyword and `wlidsvc` firewall layers are refreshed/reported when policy
-  permits but no single firewall topology is mandatory.
-- [x] Re-run the delayed-rehydrate soak with three-hive plus SYSTEM Credential
-  Manager cleanup. EXP-G first exposed SYSTEM/`.DEFAULT` Property/Token stores,
-  then SYSTEM `didlogical`. The final revision remained `ProtectedNoRealGdid` at
-  eight hours and again beyond 33 hours, exceeding both prior failure windows and
-  the original 24-hour criterion.
-- [x] Run `-Protect` against the real contaminated state shape: target-user LID,
-  Property, Token/Tickets, machine residual cache, and related files. Interim
-  `EXP-G` cleared that state and held through two reboots plus service/task
-  triggers. A separate current-revision control restored the offline S1 snapshot
-  once, allowed a fresh natural mint, ran one Protect without checkpoint bouncing,
-  and remained clear after reboot plus ten identity-trigger checks through 497
-  seconds. The recurrence from the repeatedly restored contaminated checkpoint
-  remains a distinct lab artifact rather than evidence against that clean path.
-- [ ] Re-run EXP-H on the MSA-connected profile. The same old user LID returned
-  locally after the earlier bundle cleared; targeted `SSO_POP_Device` and
-  WindowsLive `didlogical` credential cleanup is now implemented. The latest field
-  run aborted safely when busy `wlidsvc` refused a normal stop; bounded
-  disable/SCM retry with startup restoration now needs the rerun. Actual MSA UI
-  compatibility remains separate from this GDID-state check.
-- [x] Support Windows 10 22H2/build 19045 and Windows 11 build 22000 or newer,
-  with an explicit warning outside the lab-validated Windows 11
-  25H2/build-26200 line.
-- [ ] Run the full Windows 10 22H2/build-19045 closure matrix.
-- [ ] Run the full closure matrix on additional builds to replace generic support
-  warnings with build-specific evidence.
+**Closure:** either run the same block, natural-mint, Protect, reboot, and
+postcondition matrix on those builds, or narrow the accepted build contract to the
+validated line.
 
-## Generation
+## 2. Anonymous DeviceAdd wire response — high-value research
 
-- [x] Confirm anonymous/local-account machine-level mint: after unblock, EXP-B
-  produced the same `0018…` PUID in SYSTEM and `.DEFAULT` without MSA while HKCU
-  remained empty. `[LAB]`
-- [ ] Capture the full anonymous DeviceAdd path with ETW and a redacted raw SOAP
-  response. EXP-B proved the outcome, not the complete wire schema.
-- [x] Confirm whether `.DEFAULT` / SYSTEM `LID` can differ from interactive-user
-  `LID`: they can; SYSTEM and `.DEFAULT` were populated while HKCU remained empty
-  in EXP-B. `[LAB]`
-- [ ] Exact XML fields returned today (`GlobalDeviceID` vs `DevicePUID` vs
-  `HWPUIDFlipped`) on Win11 24H2/25H2 -> **narrowed:** build-26200 public-PDB
-  analysis identifies
-  `/S:Envelope/S:Body/ps:DeviceUpdatePropertiesResponse/HWPUIDFlipped`
-  `[STATIC]`; a cited Autopilot capture shows `HWDeviceID` + `GlobalDeviceID`
-  `[CITED-RE]`. A redacted response from each current consumer/anonymous flow is
-  still needed before calling the complete schema stable.
-- [ ] Whether DeviceAdd hardware components enable a server-side link across
-  reinstalls, and how strong that link is -> cited captures include EKPub, SMBIOS
-  serial, OfflineDeviceID, and other hardware inputs `[CITED-RE]`. Autopilot shows
-  that a *separate* backend can match its hardware hash after receiving a device
-  token `[CITED-RE]`; that does not prove a GDID-backend join.
+**Question:** What request and response fields does the current local-account
+DeviceAdd flow actually use, including the returned `GlobalDeviceID`, `DevicePUID`,
+or `HWPUIDFlipped` field?
 
-## Emission / court channel
+**Why it matters:** EXP-B proves the mint outcome and static analysis identifies
+candidate XML paths, but neither is a current wire capture.
 
-- [ ] Which component associates GDID with arbitrary HTTPS destinations (SmartScreen? DiagTrack? web threat? other?) -> the court result proves an association existed `[COURT]`, but the public filing/report names no client, endpoint, or telemetry pipeline. Do not assign it to Edge, SmartScreen, DiagTrack, CDP, or DO without a capture.
-- [x] Public retention answer for GDID IP / URL records -> **no GDID-specific duration is published.** Microsoft says retention varies by data/purpose and can be extended by legal preservation; its law-enforcement material describes process, not a GDID/IP/URL schedule `[MSDOC]`. Exact duration remains non-public.
-- [ ] Whether Edge vs Chrome vs curl differ for MS-side association
-- [ ] Whether DO download requests themselves carry GDID or only compliance snapshots do -> `UCDOStatus` proves a reporting snapshot contains `GlobalDeviceId` `[MSDOC]`; the public schema/API exposes neither Windows' built-in download headers nor a wire trace. Packet capture is still required.
+**Closure:** capture ETW plus a sanitized SOAP request/response from a disposable
+local-account VM. Keep credentials, tickets, hardware identifiers, and full PUIDs
+out of the repository.
 
-## Network
+## 3. GDID emission / court channel — high-value research
 
-- [x] Current live DDS host routing (configured-resolver snapshot, 2026-07-11) ->
-  bare `dds.microsoft.com` returned no address; `cs.dds.microsoft.com` and
-  `aad.cs.dds.microsoft.com` chain through Traffic Manager to Azure Front Door;
-  `ztd.dds.microsoft.com` chains through Traffic Manager to an Autopilot Azure host
-  `[LAB]`. Addresses are resolver/region dependent.
-- [ ] Role of NXDOMAIN hosts still in `cdp.dll` (`fd.dds...`,
-  `cdpcs.access...`) -> both returned NXDOMAIN in the current snapshot `[LAB]`;
-  public role remains unknown beyond the static strings.
-- [ ] Full list of token scopes that embed or require device PUID -> only DDS, Activity, and adjacent Live SSL scopes are evidenced so far; opaque tickets have not been decoded into a complete claim map.
+**Question:** Which Windows component and network channel produced the
+court-reported GDID association with URL, time, and IP data?
 
-## Token clients
+**Why it matters:** this is the largest unresolved link between local GDID state and
+the reported server-side record. The public record does not identify the process,
+endpoint, or payload.
 
-- [x] `{67082621-8D18-4333-9C64-10DE93676363}` -> WebView2-associated IdentityCRL ticket: multiple independent cited sandbox traces show `msedgewebview2.exe` reading its `DeviceId`/`DeviceTicket` `[CITED-RE]`. Exact Entra app-registration display name is not public.
-- [x] `{C89E2069-AF13-46DB-9E39-216131494B87}` -> CloudApp (CloudPlus) MSA client association: the IdentityCRL negative-cache entry is scoped to `tip.cloudapp.net` `[ASSESSED]`; it is not evidence of a Windows-inbox client.
-- [x] `{F0C62012-2CEF-4831-B1F7-930682874C86}` -> Windows Store licensing / `WinStoreAuth`: debug output names `WinStoreAuth::AuthenticationInternal::SetMsaClientId` with this GUID `[STATIC]`.
+**Closure:** use process-correlated ETW and packet capture around controlled browsing
+and Windows background activity. Do not attribute the channel to Edge, SmartScreen,
+DiagTrack, CDP, Delivery Optimization, or another component without direct evidence.
 
-## Policy / product
+## 4. Delivery Optimization wire behavior — focused research
 
-- [x] Post-Stokes Microsoft public statement (checked 2026-07-11) -> no GDID-specific Microsoft News/Docs/CSR statement, opt-out, or LE-retention explanation found. Public material remains the court representative description plus generic privacy/legal-process policy `[ASSESSED]`.
-- [x] Enterprise policy knob for CDP ->
-  `./Device/Vendor/MSFT/Policy/Config/Connectivity/AllowConnectedDevices=0`
-  disables CDP after reboot `[MSDOC]`. The policy documentation does not attach
-  the Autopilot Entra-sign-in warning to this setting.
-- [x] Correct the Autopilot warning attribution -> Microsoft warns that
-  **disabling the Microsoft Account Sign-in Assistant (`wlidsvc`)** during
-  Autopilot pre-provisioning may hide the Entra sign-in option and lead to
-  EULA/local-account setup `[MSDOC]`. The tool blocks `wlidsvc` outbound traffic,
-  does not disable the service, makes no Autopilot-compatibility claim, and refuses
-  managed-system mutation.
-- [x] Interaction with Windows 11 Recall -> no public GDID/DDS linkage found. Microsoft documents Recall snapshots/AI as local-only, encrypted, opt-in, and not sent to Microsoft `[MSDOC]`; this does not prove unrelated Windows services stop emitting GDID.
+**Question:** Do Windows Delivery Optimization download or reporting requests carry
+GDID directly, or is GDID only present in the documented `UCDOStatus` compliance
+snapshot?
 
-## Countermeasure validation (lab - see `lab-playbook.md`)
+**Why it matters:** the public schema proves that `GlobalDeviceId` exists in a
+reporting snapshot, not that it appears in download headers or payloads.
 
-- [x] **Prevent-at-install:** offline OOBE produced no LID on the lab VM
-  (`EXP-A1`, build 26200/25H2, NIC disconnected, all LID paths empty,
-  TokenKeys=0). `[LAB]`
-- [x] **Pre-blocks before first online, short baseline:** Internet remained usable,
-  `login.live.com` was hosts-blocked, no LID appeared, and LiveId logged
-  `0x800704CF` (`EXP-A4`). `[LAB]` This does not close the 24-hour/reboot gate.
-- [x] **Canonical wipe bundle under continuous blocks:** naive HKCU LID-only cleanup
-  rehydrated in EXP-C2; the expanded Property + Token + LID + known-cache wipe stayed
-  empty through the EXP-C3 reboot and short soak. `[LAB]`
-- [ ] **C3 ablation:** run one-store-at-a-time snapshot experiments to determine
-  whether `Immersive\production\Property\<LID>` is independently sufficient or
-  necessary for rehydrate. Until then it is a required wipe-bundle member and
-  high-confidence store, not a uniquely proven cause.
-- [x] **Mutation direction:** wipe is canonical. Decoy remains experimental and
-  carries no claim of server recognition or durable privacy.
-- [x] **Windows Update** under registration blocks -> WU scan and Defender update
-  worked; CU history showed blocked-period installs; LID stayed empty (`EXP-D`).
-  `[LAB]`
-- [ ] Controlled pending cumulative update and feature update under blocks ->
-  optional compatibility coverage. EXP-D supports only a zero-pending scan,
-  Defender update, and prior blocked-period history.
-- [x] Breakage catalog -> desktop and WU were measured working; MSA network failure
-  follows directly from blocking `login.live.com`. Store/Xbox/Phone Link auth
-  failures remain expected, not fully exercised UI results (`EXP-E`).
-- [x] Unblock after decoy / wipe -> nuanced (`EXP-F`): decoy was not instantly
-  replaced and wipe+unblock did not auto-remint without a requesting client;
-  eager remint remains demonstrated by `EXP-B`. `[LAB]`
-- [x] First-mint control -> `EXP-B` covers the allow-DeviceAdd class from a
-  never-minted image. Direct wipe-then-unblock remint remains separate and open.
-- [x] Replace the stale IP-resolution/firewall-only draft with the current
-  dual-stack hosts + dynamic FQDN + `wlidsvc` service-firewall integration.
-  A no-hosts firewall-only mode is not the shipped contract and is not a release
-  gate.
+**Closure:** capture a controlled DO transfer and reporting cycle with
+process-correlated network evidence.
+
+## 5. Servicing under the gate — optional compatibility
+
+**Question:** Can a known pending cumulative update download, install, reboot, and
+complete while the GDID gate remains healthy?
+
+**Why it matters:** update scans, Defender updates, and prior blocked-period history
+passed, but no controlled pending cumulative update was installed during EXP-D.
+
+**Closure:** run one pending cumulative update on a disposable protected VM and
+record the KB, result, reboot, final gate health, and local GDID inventory.
+
+Everything else is either answered, outside the GDID-only scope, not practically
+testable with available evidence, or too low-value to remain an active question.

@@ -1,6 +1,6 @@
 # GDID Threat / Attack Surface Map
 
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 
 Inventory of places GDID (or its Device PUID twin) is stored, computed against, emitted, or correlated. Companion to `architecture.md`.
 
@@ -20,7 +20,7 @@ suppression and the exact Stokes URL sensor remain research.
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | User | Primary readable Device PUID |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Property` | value name = LID hex | User | **Required wipe-bundle member / high-confidence rehydrate store** (~346B). It was mapped before the successful expanded wipe, but unique causality was not isolated (`EXP-C3`; ablation open). |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\Immersive\production\Token\*` | `DeviceId`, `DeviceTicket` | User | Per-client tickets; same DeviceId |
-| Target-user Credential Manager | `MicrosoftAccount:target=SSO_POP_Device`; `WindowsLive:target=virtualapp/didlogical` | User | Device credentials present on MSA-connected profiles; EXP-H observed the same old user LID rehydrate after the earlier registry/file bundle was cleared. Targeted cleanup added; causal rerun pending. |
+| Target-user Credential Manager | `MicrosoftAccount:target=SSO_POP_Device`; `WindowsLive:target=virtualapp/didlogical` | User | EXP-H observed the same old user LID rehydrate while these device credentials remained; targeted cleanup cleared the user path, and the final current-revision MSA run held through session/power transitions, reboot, and 18 hours. No one-store ablation claim. |
 | SYSTEM Credential Manager | `WindowsLive:target=virtualapp/didlogical` (and any matching device target) | SYSTEM | Found after the second delayed EXP-G machine-LID return; local machine credential source candidate, with failed network token attempts |
 | `HKCU\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties` | (account props) | User | User-side MSA props |
 | `HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL\ExtendedProperties` | `LID` | Elevated | Default profile; often present once minted |
