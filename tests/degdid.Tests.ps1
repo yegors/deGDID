@@ -990,3 +990,95 @@ Describe 'degdid Unblock sequencing' {
     Assert-MockCalled Invoke-DnsFlush 0 -Scope It
   }
 }
+
+Describe 'degdid mint scope address hygiene' {
+  It 'accepts routable IPv4 and IPv6 answers' {
+    (Test-RoutableMintAddress -Address '40.126.31.1') | Should Be $true
+    (Test-RoutableMintAddress -Address '2620:1ec:4::1') | Should Be $true
+  }
+
+  It 'rejects unspecified, loopback, and unparseable answers' {
+    (Test-RoutableMintAddress -Address '0.0.0.0') | Should Be $false
+    (Test-RoutableMintAddress -Address '::') | Should Be $false
+    (Test-RoutableMintAddress -Address '127.0.0.1') | Should Be $false
+    (Test-RoutableMintAddress -Address '::1') | Should Be $false
+    (Test-RoutableMintAddress -Address 'not-an-ip') | Should Be $false
+    (Test-RoutableMintAddress -Address $null) | Should Be $false
+  }
+
+  It 'drops sinkhole answers from the resolved mint scope' {
+    Mock Resolve-DnsName {
+      @(
+        [pscustomobject]@{ IPAddress = '40.126.31.1' }
+        [pscustomobject]@{ IPAddress = '0.0.0.0' }
+        [pscustomobject]@{ IPAddress = '127.0.0.1' }
+      )
+    }
+    $scope = @(Get-MintScopeAddress)
+    ($scope -contains '40.126.31.1') | Should Be $true
+    ($scope -contains '0.0.0.0') | Should Be $false
+    ($scope -contains '127.0.0.1') | Should Be $false
+  }
+}
+
+Describe 'degdid mint scope refresh' {
+  It 'exposes the RefreshMintScope switch' {
+    $parameters = @((Get-Command $scriptPath).Parameters.Keys)
+    ($parameters -contains 'RefreshMintScope') | Should Be $true
+  }
+
+  It 'plans a refresh under DryRun without recreating the rule' {
+    Mock Test-DynamicFirewallSupport { $true }
+    Mock Get-MintScopeAddress { @('40.126.31.1') }
+    Mock Get-FirewallState { [pscustomobject]@{ MintServiceRuleValid = $true } }
+    Mock New-StagingMintServiceRule {}
+    Mock New-PermanentMintServiceRule {}
+    $result = Invoke-MintScopeRefresh -DryRun
+    $result.Success | Should Be $true
+    $result.ExitCode | Should Be 0
+    Assert-MockCalled New-PermanentMintServiceRule -Times 0 -Exactly -Scope It
+  }
+
+  It 'leaves the rule unchanged when nothing routable resolves' {
+    Mock Test-DynamicFirewallSupport { $true }
+    Mock Get-MintScopeAddress { @() }
+    Mock Get-FirewallState { [pscustomobject]@{ MintServiceRuleValid = $true } }
+    Mock New-PermanentMintServiceRule {}
+    $result = Invoke-MintScopeRefresh
+    $result.ExitCode | Should Be 0
+    $result.Message | Should Match 'left unchanged'
+    Assert-MockCalled New-PermanentMintServiceRule -Times 0 -Exactly -Scope It
+  }
+
+  It 're-scopes behind a fail-closed staging deny on success' {
+    Mock Test-DynamicFirewallSupport { $true }
+    Mock Get-MintScopeAddress { @('40.126.31.1') }
+    Mock New-StagingMintServiceRule {}
+    Mock Wait-StagingMintServiceRuleEnforced { $true }
+    Mock Get-NetFirewallRule { @() }
+    Mock Remove-NetFirewallRule {}
+    Mock New-PermanentMintServiceRule {}
+    Mock Wait-PermanentMintServiceRuleEnforced { $true }
+    Mock Remove-StagingMintServiceRule {}
+    Mock Get-FirewallState { [pscustomobject]@{ MintServiceRuleValid = $true } }
+    $result = Invoke-MintScopeRefresh
+    $result.Success | Should Be $true
+    $result.ExitCode | Should Be 0
+    Assert-MockCalled New-StagingMintServiceRule -Times 1 -Exactly -Scope It
+    Assert-MockCalled New-PermanentMintServiceRule -Times 1 -Exactly -Scope It
+    Assert-MockCalled Remove-StagingMintServiceRule -Times 1 -Exactly -Scope It
+  }
+
+  It 'fails closed when the staging deny is not enforced' {
+    Mock Test-DynamicFirewallSupport { $true }
+    Mock Get-MintScopeAddress { @('40.126.31.1') }
+    Mock New-StagingMintServiceRule {}
+    Mock Wait-StagingMintServiceRuleEnforced { $false }
+    Mock New-PermanentMintServiceRule {}
+    Mock Get-FirewallState { [pscustomobject]@{ MintServiceRuleValid = $false } }
+    $result = Invoke-MintScopeRefresh
+    $result.Success | Should Be $false
+    $result.ExitCode | Should Be 3
+    Assert-MockCalled New-PermanentMintServiceRule -Times 0 -Exactly -Scope It
+  }
+}

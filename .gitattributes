@@ -1,0 +1,4 @@
+# Keep line endings LF everywhere so Windows core.autocrlf cannot rewrite
+# checkouts to CRLF and surface phantom whole-file diffs. All tracked files are
+# already LF, so this changes no blobs; it only pins working-tree handling.
+* text=auto eol=lf
