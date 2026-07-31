@@ -1676,9 +1676,55 @@ function Get-DsregJoinState {
   }
 }
 
+function Get-NormalizedEnrollmentGuid {
+  param([AllowNull()][string]$Name)
+  if (-not $Name) { return $null }
+  return $Name.Trim('{', '}').ToLowerInvariant()
+}
+
+function Test-RealMdmEnrollmentEntry {
+  # A genuine server-backed enrollment has an active state plus a real server or
+  # user binding. Windows internal CSPs (Local/Cloud/Deploy Authority) and the
+  # FFFFFFFF-... fake/local placeholder carry neither, so they fail here.
+  param(
+    [AllowNull()][string[]]$ValueNames,
+    [AllowNull()][object]$EnrollmentState,
+    [AllowNull()][object]$Upn,
+    [AllowNull()][object]$DiscoveryUrl
+  )
+  if (-not (@($ValueNames) -contains 'EnrollmentState')) { return $false }
+  $state = 0
+  if (-not [int]::TryParse([string]$EnrollmentState, [ref]$state)) { return $false }
+  if ($state -ne 1) { return $false }
+  return [bool]$Upn -or [bool]$DiscoveryUrl
+}
+
+function Select-CorroboratedOmadmAccount {
+  # An OMADM account only counts as MDM evidence when its GUID matches a real
+  # enrollment. This rejects the well-known FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF
+  # placeholder (a fake/local marker that stock and NTLite-imaged Windows carry
+  # without a paired real enrollment) and any other uncorroborated stub.
+  param(
+    [AllowNull()][string[]]$OmadmAccountIds,
+    [AllowNull()][string[]]$RealEnrollmentIds
+  )
+  $real = @{}
+  foreach ($id in @($RealEnrollmentIds)) {
+    $n = Get-NormalizedEnrollmentGuid -Name $id
+    if ($n) { $real[$n] = $true }
+  }
+  return @(
+    @($OmadmAccountIds) | Where-Object {
+      $n = Get-NormalizedEnrollmentGuid -Name $_
+      $n -and $real.ContainsKey($n)
+    }
+  )
+}
+
 function Get-MdmEnrollmentState {
   $evidence = 0
   try {
+    $realEnrollmentIds = New-Object System.Collections.Generic.List[string]
     $enrollmentsPath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments'
     if (Test-Path -LiteralPath $enrollmentsPath -ErrorAction Stop) {
       foreach (
@@ -1690,24 +1736,29 @@ function Get-MdmEnrollmentState {
         )
       ) {
         $item = Get-Item -LiteralPath $key.PSPath -ErrorAction Stop
-        $names = @($item.GetValueNames())
-        $upn = $item.GetValue('UPN', $null)
-        $discovery = $item.GetValue('DiscoveryServiceFullURL', $null)
-        $state = $item.GetValue('EnrollmentState', $null)
         if (
-          $names -contains 'EnrollmentState' -and
-          [int]$state -eq 1 -and
-          ($upn -or $discovery)
+          Test-RealMdmEnrollmentEntry `
+            -ValueNames @($item.GetValueNames()) `
+            -EnrollmentState $item.GetValue('EnrollmentState', $null) `
+            -Upn $item.GetValue('UPN', $null) `
+            -DiscoveryUrl $item.GetValue('DiscoveryServiceFullURL', $null)
         ) {
-          $evidence++
+          [void]$realEnrollmentIds.Add($key.PSChildName)
         }
       }
     }
+    $evidence += $realEnrollmentIds.Count
 
     $omadmPath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Provisioning\OMADM\Accounts'
     if (Test-Path -LiteralPath $omadmPath -ErrorAction Stop) {
+      $omadmIds = @(
+        Get-ChildItem -LiteralPath $omadmPath -ErrorAction Stop |
+          ForEach-Object { $_.PSChildName }
+      )
       $evidence += @(
-        Get-ChildItem -LiteralPath $omadmPath -ErrorAction Stop
+        Select-CorroboratedOmadmAccount `
+          -OmadmAccountIds $omadmIds `
+          -RealEnrollmentIds @($realEnrollmentIds)
       ).Count
     }
 

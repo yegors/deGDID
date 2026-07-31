@@ -990,3 +990,163 @@ Describe 'degdid Unblock sequencing' {
     Assert-MockCalled Invoke-DnsFlush 0 -Scope It
   }
 }
+
+function New-TestRegKey {
+  param(
+    [string]$ChildName,
+    [hashtable]$Values = @{}
+  )
+  $key = [pscustomobject]@{
+    PSChildName = $ChildName
+    PSPath = "TestRegistry::$ChildName"
+    _values = $Values
+  }
+  $key |
+    Add-Member -MemberType ScriptMethod -Name GetValueNames -Value {
+      @($this._values.Keys)
+    } -PassThru |
+    Add-Member -MemberType ScriptMethod -Name GetValue -Value {
+      param($name, $default)
+      if ($this._values.ContainsKey($name)) { return $this._values[$name] }
+      return $default
+    } -PassThru
+}
+
+Describe 'degdid MDM enrollment classification' {
+  $fakeGuid = 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF'
+  $realGuid = 'A1B2C3D4-1111-2222-3333-444455556666'
+
+  It 'accepts an active enrollment bound by UPN' {
+    (Test-RealMdmEnrollmentEntry `
+        -ValueNames @('EnrollmentState', 'UPN') `
+        -EnrollmentState 1 `
+        -Upn 'user@contoso.com' `
+        -DiscoveryUrl $null) | Should Be $true
+  }
+
+  It 'accepts an active enrollment bound by discovery URL' {
+    (Test-RealMdmEnrollmentEntry `
+        -ValueNames @('EnrollmentState', 'DiscoveryServiceFullURL') `
+        -EnrollmentState 1 `
+        -Upn $null `
+        -DiscoveryUrl 'https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc') |
+      Should Be $true
+  }
+
+  It 'rejects an active entry with no server or user binding' {
+    (Test-RealMdmEnrollmentEntry `
+        -ValueNames @('EnrollmentState') `
+        -EnrollmentState 1 `
+        -Upn $null `
+        -DiscoveryUrl $null) | Should Be $false
+  }
+
+  It 'rejects a not-yet-active enrollment' {
+    (Test-RealMdmEnrollmentEntry `
+        -ValueNames @('EnrollmentState', 'UPN') `
+        -EnrollmentState 0 `
+        -Upn 'user@contoso.com' `
+        -DiscoveryUrl $null) | Should Be $false
+  }
+
+  It 'rejects an entry without an EnrollmentState value' {
+    (Test-RealMdmEnrollmentEntry `
+        -ValueNames @('UPN') `
+        -EnrollmentState $null `
+        -Upn 'user@contoso.com' `
+        -DiscoveryUrl $null) | Should Be $false
+  }
+
+  It 'excludes the FFFF placeholder when no real enrollment corroborates it' {
+    $selected = @(
+      Select-CorroboratedOmadmAccount `
+        -OmadmAccountIds @($fakeGuid) `
+        -RealEnrollmentIds @()
+    )
+    $selected.Count | Should Be 0
+  }
+
+  It 'includes an OMADM account backed by a real enrollment' {
+    $selected = @(
+      Select-CorroboratedOmadmAccount `
+        -OmadmAccountIds @($realGuid) `
+        -RealEnrollmentIds @($realGuid)
+    )
+    $selected.Count | Should Be 1
+  }
+
+  It 'matches GUIDs irrespective of brace and case formatting' {
+    $selected = @(
+      Select-CorroboratedOmadmAccount `
+        -OmadmAccountIds @($realGuid.ToLowerInvariant()) `
+        -RealEnrollmentIds @('{' + $realGuid.ToUpperInvariant() + '}')
+    )
+    $selected.Count | Should Be 1
+  }
+
+  It 'excludes an OMADM account absent from the real enrollment set' {
+    $selected = @(
+      Select-CorroboratedOmadmAccount `
+        -OmadmAccountIds @($realGuid) `
+        -RealEnrollmentIds @('99999999-0000-0000-0000-000000000000')
+    )
+    $selected.Count | Should Be 0
+  }
+
+  It 'keeps only corroborated accounts from a mixed set' {
+    $selected = @(
+      Select-CorroboratedOmadmAccount `
+        -OmadmAccountIds @($fakeGuid, $realGuid) `
+        -RealEnrollmentIds @($realGuid)
+    )
+    $selected.Count | Should Be 1
+    $selected[0] | Should Be $realGuid
+  }
+
+  It 'reports not-enrolled on a clean machine carrying only the OMADM placeholder' {
+    # Issue #8 repro: stock/NTLite-imaged Windows 11 25H2 exposes internal CSP
+    # enrollments (no UPN/Discovery) plus the FFFF fake/local OMADM stub. None
+    # is a real enrollment, so the verdict must stay eligible.
+    $internalCsp = New-TestRegKey -ChildName '11111111-2222-3333-4444-555566667777' -Values @{
+      EnrollmentState = 1
+    }
+    $fakeEnrollment = New-TestRegKey -ChildName $fakeGuid -Values @{ ProtoVer = '1.2' }
+    $enrollmentKeys = @($internalCsp, $fakeEnrollment)
+    $omadmKeys = @(New-TestRegKey -ChildName $fakeGuid)
+    $itemsByPath = @{}
+    foreach ($k in $enrollmentKeys) { $itemsByPath[$k.PSPath] = $k }
+
+    Mock Test-Path { $true } -ParameterFilter {
+      $LiteralPath -like '*\Enrollments' -or $LiteralPath -like '*OMADM\Accounts'
+    }
+    Mock Get-ChildItem { $enrollmentKeys } -ParameterFilter { $LiteralPath -like '*\Enrollments' }
+    Mock Get-ChildItem { $omadmKeys } -ParameterFilter { $LiteralPath -like '*OMADM\Accounts' }
+    Mock Get-Item { $itemsByPath[$LiteralPath] }
+
+    $state = Get-MdmEnrollmentState
+    $state.Known | Should Be $true
+    $state.Enrolled | Should Be $false
+    $state.EvidenceCount | Should Be 0
+  }
+
+  It 'reports enrolled for a genuine server-backed enrollment' {
+    $realEnrollment = New-TestRegKey -ChildName $realGuid -Values @{
+      EnrollmentState = 1
+      UPN = 'user@contoso.com'
+    }
+    $enrollmentKeys = @($realEnrollment)
+    $omadmKeys = @(New-TestRegKey -ChildName $realGuid)
+    $itemsByPath = @{ $realEnrollment.PSPath = $realEnrollment }
+
+    Mock Test-Path { $true } -ParameterFilter {
+      $LiteralPath -like '*\Enrollments' -or $LiteralPath -like '*OMADM\Accounts'
+    }
+    Mock Get-ChildItem { $enrollmentKeys } -ParameterFilter { $LiteralPath -like '*\Enrollments' }
+    Mock Get-ChildItem { $omadmKeys } -ParameterFilter { $LiteralPath -like '*OMADM\Accounts' }
+    Mock Get-Item { $itemsByPath[$LiteralPath] }
+
+    $state = Get-MdmEnrollmentState
+    $state.Known | Should Be $true
+    $state.Enrolled | Should Be $true
+  }
+}
