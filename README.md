@@ -34,6 +34,9 @@ Windows 11 25H2/build 26200 is the fully lab-validated line. Other accepted buil
 warn. Managed systems, ambiguous users, and multiple loaded human profiles are
 refused instead of guessed at.
 
+A standalone Windows Server edition is refused by default and can opt in with
+`-AllowServerSku`. Domain controllers are always refused.
+
 Status can still inspect unsupported systems. See the
 [`usage guide`](docs/usage.md) for the complete eligibility rules.
 

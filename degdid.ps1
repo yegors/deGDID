@@ -48,6 +48,13 @@
   Inspect and report planned work without changing hosts, firewall, services,
   registry, or files. DryRun never claims that planned blocks are active.
 
+.PARAMETER AllowServerSku
+  Opt in to mutating actions on a standalone Windows Server SKU. Server is
+  refused by default because the single-interactive-user and
+  single-loaded-profile assumptions are weaker there. Domain controllers,
+  domain-joined, Entra-joined, and MDM-enrolled systems stay refused, as do
+  systems with more than one loaded human-profile hive.
+
 .PARAMETER Json
   Emit Status as JSON.
 
@@ -90,6 +97,8 @@ param(
   [switch]$Json,
 
   [switch]$DryRun,
+
+  [switch]$AllowServerSku,
 
   [Parameter(DontShow = $true)]
   [switch]$InternalNoExit
@@ -1845,6 +1854,7 @@ function Get-EnvironmentState {
   $humanProfiles = @()
   $loadedHumanProfiles = @()
   $workstation = $false
+  $roleAllowed = $false
 
   if (
     [Environment]::Is64BitOperatingSystem -and
@@ -1883,13 +1893,30 @@ function Get-EnvironmentState {
 
   try {
     $operatingSystem = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-    $workstation = [int]$operatingSystem.ProductType -eq 1
-    if (-not $workstation) {
-      [void]$unsupported.Add('Windows client/workstation edition is required.')
+    # Win32_OperatingSystem.ProductType: 1 = workstation, 2 = domain controller,
+    # 3 = member/standalone server. Server is opt-in rather than flatly refused;
+    # a domain controller is never an acceptable mutation target.
+    $productType = [int]$operatingSystem.ProductType
+    $workstation = $productType -eq 1
+    if ($workstation) {
+      $roleAllowed = $true
+    } elseif ($productType -eq 3) {
+      if ($AllowServerSku) {
+        $roleAllowed = $true
+        [void]$warnings.Add(
+          'Running on a Windows Server SKU via -AllowServerSku; the single-interactive-user and single-loaded-profile assumptions are weaker here.'
+        )
+      } else {
+        [void]$unsupported.Add(
+          'Windows client/workstation edition is required; re-run with -AllowServerSku to opt in on a standalone Windows Server.'
+        )
+      }
+    } else {
+      [void]$unsupported.Add('Domain controllers are outside the mutation contract.')
     }
   } catch {
     [void]$inspectionErrors.Add(('Operating system role: {0}' -f $_.Exception.Message))
-    [void]$unsupported.Add('Windows workstation role could not be established.')
+    [void]$unsupported.Add('Windows operating system role could not be established.')
   }
 
   $computer = $null
@@ -2051,12 +2078,12 @@ function Get-EnvironmentState {
     )
     IsSupportedBuild = (
       (Test-SupportedWindowsBuild -Build $build) -and
-      $workstation
+      $roleAllowed
     )
     IsLabValidatedBuild = (
       $build -eq $script:LabValidatedBuild -and
       $displayVersion -eq $script:LabValidatedDisplayVersion -and
-      $workstation
+      $roleAllowed
     )
     Is64BitProcess = [Environment]::Is64BitProcess
     Unmanaged = (

@@ -1,6 +1,6 @@
 # Usage and CLI Reference
 
-Last updated: 2026-07-16
+Last updated: 2026-08-10
 
 `degdid.ps1` inspects local GDID state, blocks the Microsoft DeviceAdd mint path,
 and removes known local copies of real server-issued Device PUIDs.
@@ -11,6 +11,8 @@ Mutating actions require:
 
 - elevated 64-bit Windows PowerShell;
 - Windows 10 22H2/build 19045, or Windows 11 build 22000 or newer;
+- a Windows client/workstation edition, or a standalone Windows Server with
+  `-AllowServerSku`;
 - no domain, Entra, workplace, or MDM enrollment;
 - exactly one loaded human profile and one resolvable target user; and
 - the target user's registry hive loaded.
@@ -55,9 +57,38 @@ online.
 - `.\degdid.ps1 -Decoy` — install a decoy only when an existing gate verifies.
 - `.\degdid.ps1 -Unblock` — remove valid degdid-owned network controls.
 - `.\degdid.ps1 <action> -DryRun` — report intended work without substituting planned state for current state.
+- `.\degdid.ps1 <action> -AllowServerSku` — opt in to a standalone Windows Server edition.
 
 Use `-Protect` for the normal contaminated-system path. `-Wipe` and `-Decoy`
 refuse to mutate without a verified block.
+
+## Windows Server
+
+`Win32_OperatingSystem.ProductType` is checked before any mutation. `1`
+(workstation) is accepted by default. `3` (member or standalone server) is
+refused unless `-AllowServerSku` is supplied. `2` (domain controller) is always
+refused.
+
+Server is opt-in because the mutation path assumes a single interactive human,
+not a multi-session host: target-user Credential Manager cleanup runs in the
+target's interactive logon session, and the wipe covers exactly one loaded
+profile hive. Every other eligibility rule is unchanged — domain-joined,
+Entra-joined, MDM-enrolled, and multiple-loaded-human-profile systems stay
+refused with `-AllowServerSku` present.
+
+```powershell
+.\degdid.ps1 -Status -AllowServerSku
+.\degdid.ps1 -Protect -AllowServerSku
+```
+
+Supply the switch on `-Status` as well. Without it, `Get-EnvironmentState` still
+records the server refusal, so verdict precedence reports
+`UnsupportedEnvironment` and masks the protection result. Confirm no other user
+is signed in before mutating; a second interactive session fails the credential
+cleanup postcondition.
+
+Server SKUs are accepted generically. They are not a lab-validated line, and a
+server run adds a warning to that effect.
 
 ## Status verdicts
 
@@ -69,6 +100,9 @@ refuse to mutate without a verified block.
 
 Verdict precedence follows that order. Status displays the actual account, profile,
 registry PUIDs, and `g:<decimal>` values; do not publish its full output.
+
+Because `UnsupportedEnvironment` outranks the identity and gate verdicts, a
+machine that needs an opt-in switch reports it until that switch is supplied.
 
 ## What Protect changes
 

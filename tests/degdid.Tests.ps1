@@ -8,6 +8,13 @@ Describe 'degdid current public interface' {
     ($parameters -contains 'Redact') | Should Be $false
     ($parameters -contains 'ShowIdentifier') | Should Be $false
   }
+
+  It 'exposes AllowServerSku to every action rather than one parameter set' {
+    $parameter = (Get-Command $scriptPath).Parameters['AllowServerSku']
+    $parameter | Should Not BeNullOrEmpty
+    $parameter.ParameterType | Should Be ([switch])
+    @($parameter.ParameterSets.Keys) -contains '__AllParameterSets' | Should Be $true
+  }
 }
 
 Describe 'degdid hosts parser' {
