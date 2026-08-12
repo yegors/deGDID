@@ -2267,6 +2267,37 @@ function Get-TargetCredentialAccessMode {
   return 'Unavailable'
 }
 
+function Wait-GdidScheduleServiceReady {
+  param([int]$TimeoutSeconds = 30)
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $service = Get-Service -Name 'Schedule' -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq 'Running') {
+      return $true
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Format-GdidTaskResultCode {
+  param([object]$Info)
+
+  if ($null -eq $Info) {
+    return 'unknown'
+  }
+  $code = [int64]$Info.LastTaskResult
+  $text = '{0} (0x{1:X8})' -f $code, $code
+  # 0xC000013A is STATUS_CONTROL_C_EXIT: the task process was killed rather than
+  # exiting on its own, which is what Task Scheduler does to running tasks when
+  # its own service goes down.
+  if ($code -eq 3221225786 -or $code -eq -1073741510) {
+    return '{0}, meaning the helper process was terminated - the Task Scheduler service most likely restarted mid-run' -f $text
+  }
+  return $text
+}
+
 function Invoke-CredentialTask {
   param(
     [string]$UserId,
@@ -2348,33 +2379,54 @@ if (`$delete) {
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries
 
+  # The helper runs as a scheduled task, so a Task Scheduler service that is
+  # restarting will terminate it mid-run (LastTaskResult 0xC000013A) without
+  # producing output. Wait for the service and retry once before giving up; a
+  # helper that ran and reported its own errors is never retried.
+  $attemptErrors = New-Object System.Collections.Generic.List[string]
   try {
-    Register-ScheduledTask `
-      -TaskName $taskName `
-      -Action $action `
-      -Principal $principal `
-      -Settings $settings `
-      -Force `
-      -ErrorAction Stop | Out-Null
-    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
-    $deadline = (Get-Date).AddSeconds(30)
-    while (
-      -not (Test-Path -LiteralPath $resultPath) -and
-      (Get-Date) -lt $deadline
-    ) {
-      Start-Sleep -Milliseconds 200
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+      if (-not (Wait-GdidScheduleServiceReady)) {
+        [void]$attemptErrors.Add('the Task Scheduler service was not running')
+        continue
+      }
+      try {
+        Register-ScheduledTask `
+          -TaskName $taskName `
+          -Action $action `
+          -Principal $principal `
+          -Settings $settings `
+          -Force `
+          -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+      } catch {
+        [void]$attemptErrors.Add($_.Exception.Message)
+        continue
+      }
+      $deadline = (Get-Date).AddSeconds(30)
+      while (
+        -not (Test-Path -LiteralPath $resultPath) -and
+        (Get-Date) -lt $deadline
+      ) {
+        Start-Sleep -Milliseconds 200
+      }
+      if (Test-Path -LiteralPath $resultPath) {
+        $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop |
+          ConvertFrom-Json
+        if (@($result.Errors).Count -gt 0) {
+          throw (@($result.Errors) -join '; ')
+        }
+        return @($result.States)
+      }
+      $info = Get-ScheduledTaskInfo `
+        -TaskName $taskName `
+        -ErrorAction SilentlyContinue
+      [void]$attemptErrors.Add(
+        'LastTaskResult={0}' -f (Format-GdidTaskResultCode -Info $info)
+      )
     }
-    if (-not (Test-Path -LiteralPath $resultPath)) {
-      $info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
-      throw 'Credential helper produced no result. LastTaskResult={0}' -f
-        $(if ($info) { $info.LastTaskResult } else { 'unknown' })
-    }
-    $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop |
-      ConvertFrom-Json
-    if (@($result.Errors).Count -gt 0) {
-      throw (@($result.Errors) -join '; ')
-    }
-    return @($result.States)
+    throw 'Credential helper produced no result. {0}' -f
+      (($attemptErrors | Select-Object -Unique) -join '; ')
   } finally {
     Unregister-ScheduledTask `
       -TaskName $taskName `
@@ -3020,6 +3072,82 @@ function Get-GdidServiceSnapshot {
       Services = @()
     }
   }
+}
+
+# Windows only gives each service its own svchost.exe process when physical RAM
+# exceeds SvcHostSplitThresholdInKB (16 GB by default). Below that threshold
+# wlidsvc and TokenBroker share one "svchost.exe -k netsvcs -p" process with
+# Schedule (Task Scheduler) and Winmgmt (WMI) - the two services this tool needs
+# in order to inspect and delete MSA device credentials, because the credential
+# helper runs as a scheduled task and the ScheduledTasks cmdlets go through CIM.
+# Force-stopping a co-hosted identity service can fail-fast the shared host
+# (svchost.exe crashing in combase.dll with 0xC0000602), which takes Task
+# Scheduler and WMI down with it, kills the in-flight credential helper, and
+# leaves the quiesce half-finished. Detect that layout before anything is stopped.
+$script:GdidServiceHostCriticalDependencies = @('Schedule', 'Winmgmt')
+
+function Get-GdidServiceHostMap {
+  return @(
+    Get-CimInstance -ClassName Win32_Service -ErrorAction Stop |
+      Select-Object -Property Name, ProcessId
+  )
+}
+
+function Get-GdidServiceHostConflict {
+  # Returns one entry per service degdid intends to stop that shares its host
+  # process with a service degdid itself depends on. An empty array means every
+  # service we are about to stop can be stopped without collateral damage.
+  param([object[]]$ServiceStates)
+
+  $map = @(Get-GdidServiceHostMap)
+  $byName = @{}
+  foreach ($entry in $map) {
+    $byName[$entry.Name] = $entry
+  }
+
+  $conflicts = New-Object System.Collections.Generic.List[object]
+  foreach ($state in $ServiceStates | Where-Object { $_.WasRunning }) {
+    $hosted = $byName[$state.Name]
+    if ($null -eq $hosted -or -not $hosted.ProcessId) {
+      continue
+    }
+    $shared = @(
+      $map |
+        Where-Object {
+          $_.ProcessId -eq $hosted.ProcessId -and
+          $_.Name -ne $hosted.Name -and
+          $script:GdidServiceHostCriticalDependencies -contains $_.Name
+        } |
+        ForEach-Object { $_.Name } |
+        Sort-Object -Unique
+    )
+    if ($shared.Count -gt 0) {
+      [void]$conflicts.Add([pscustomobject]@{
+        Name = $state.Name
+        ProcessId = [int]$hosted.ProcessId
+        SharedWith = $shared
+      })
+    }
+  }
+  return $conflicts.ToArray()
+}
+
+function Get-GdidServiceHostConflictError {
+  param([object[]]$Conflicts)
+
+  $messages = New-Object System.Collections.Generic.List[string]
+  foreach ($conflict in $Conflicts) {
+    [void]$messages.Add((
+      '{0} shares svchost.exe process {1} with {2}; stopping it can take those services down with it.' -f
+      $conflict.Name,
+      $conflict.ProcessId,
+      (($conflict.SharedWith) -join ', ')
+    ))
+  }
+  [void]$messages.Add(
+    'This machine does not split services into per-service svchost processes. Raise SvcHostSplitThresholdInKB coverage by setting HKLM:\SYSTEM\CurrentControlSet\Control\SvcHostSplitThresholdInKB below installed RAM in KB and rebooting, then retry.'
+  )
+  return $messages.ToArray()
 }
 
 function Add-OperationResult {
@@ -3783,6 +3911,35 @@ function Invoke-IdentityMutation {
     }
   }
 
+  try {
+    $hostConflicts = @(
+      Get-GdidServiceHostConflict -ServiceStates $snapshot.Services
+    )
+  } catch {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Identity service host layout could not be determined; no mutation was attempted.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = @()
+      Postcondition = $null
+      Errors = @('ServiceHostLayout: {0}' -f $_.Exception.Message)
+    }
+  }
+  if ($hostConflicts.Count -gt 0) {
+    return [pscustomobject]@{
+      Success = $false
+      ExitCode = 5
+      Message = 'Identity services share a host process with services degdid depends on; nothing was stopped and no identity state was changed.'
+      CapturedCount = $captured.Count
+      Decoy = $decoy
+      Results = @()
+      Postcondition = $null
+      Errors = @(Get-GdidServiceHostConflictError -Conflicts $hostConflicts)
+    }
+  }
+
   $stopped = Stop-GdidServices -ServiceStates $snapshot.Services -Results $results
   if (-not $stopped) {
     return [pscustomobject]@{
@@ -3793,6 +3950,7 @@ function Invoke-IdentityMutation {
       Decoy = $decoy
       Results = $results.ToArray()
       Postcondition = $null
+      ServiceStates = @($snapshot.Services)
       Errors = @(
         $results |
           Where-Object { -not $_.Success } |
@@ -3803,14 +3961,27 @@ function Invoke-IdentityMutation {
 
   $quiescedInventory = Get-GdidInventory -Model $model
   if ($quiescedInventory.Errors.Count -gt 0) {
+    # No identity store has been written yet, so this is a clean abort: put the
+    # services back exactly as they were rather than leaving the machine
+    # quiesced - and, more importantly, rather than leaving wlidsvc on the
+    # temporary Disabled start type that Stop-GdidServiceRobust may have set.
+    $resumed = Resume-GdidServices `
+      -ServiceStates $snapshot.Services `
+      -Results $results
+    $message = $(if ($resumed) {
+      'Quiesced inventory failed; identity stores were not changed and services were restored.'
+    } else {
+      'Quiesced inventory failed; identity stores were not changed and services could not be fully restored.'
+    })
     return [pscustomobject]@{
       Success = $false
       ExitCode = 5
-      Message = 'Quiesced inventory failed; identity stores were not changed and services remain quiesced.'
+      Message = $message
       CapturedCount = $captured.Count
       Decoy = $decoy
       Results = $results.ToArray()
       Postcondition = $null
+      ServiceStates = @($snapshot.Services)
       Errors = @($quiescedInventory.Errors)
     }
   }
@@ -3841,6 +4012,7 @@ function Invoke-IdentityMutation {
       Decoy = $decoy
       Results = $results.ToArray()
       Postcondition = $null
+      ServiceStates = @($snapshot.Services)
       Errors = @(
         'Identity stores were not changed.',
         $(if (-not $barrier) { 'Fail-closed mint barrier was incomplete.' })
@@ -3861,6 +4033,7 @@ function Invoke-IdentityMutation {
       Decoy = $decoy
       Results = $results.ToArray()
       Postcondition = $null
+      ServiceStates = @($snapshot.Services)
       Errors = @($preWriteSafety.Errors) + @(
         $(if (-not $barrier) { 'Fail-closed mint barrier was incomplete.' })
       ) | Where-Object { $_ }
@@ -3888,6 +4061,7 @@ function Invoke-IdentityMutation {
       Decoy = $decoy
       Results = $results.ToArray()
       Postcondition = $null
+      ServiceStates = @($snapshot.Services)
       Errors = @(
         'Registration block gate was lost after identity writes.',
         $(if (-not $barrier) { 'Fail-closed mint barrier was incomplete.' })
@@ -3968,6 +4142,7 @@ function Invoke-IdentityMutation {
     Results = $results.ToArray()
     Postcondition = $postcondition
     AfterInventory = $after
+    ServiceStates = @($snapshot.Services)
     Errors = @($errors | Where-Object { $_ })
   }
 }
@@ -4633,6 +4808,19 @@ function Write-MutationResult {
     Write-Output (
       'Error: {0}' -f
       $errorText
+    )
+  }
+  # A service left on the temporary Disabled start type stays disabled across
+  # reboots and silently breaks Microsoft Account sign-in, so it can never be
+  # left implicit in the output.
+  $leftDisabled = @(
+    $Result.ServiceStates | Where-Object { $_.TemporarilyDisabled }
+  )
+  foreach ($state in $leftDisabled) {
+    Write-Output (
+      'ServiceLeftDisabled {0}: start type is still Disabled (original: {1}). Restore with: Set-Service -Name {0} -StartupType {1}' -f
+      $state.Name,
+      $state.StartType
     )
   }
   if (-not $Result.Success -and $null -ne $Result.AfterInventory) {
