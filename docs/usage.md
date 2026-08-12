@@ -1,6 +1,6 @@
 # Usage and CLI Reference
 
-Last updated: 2026-07-16
+Last updated: 2026-08-12
 
 `degdid.ps1` inspects local GDID state, blocks the Microsoft DeviceAdd mint path,
 and removes known local copies of real server-issued Device PUIDs.
@@ -12,8 +12,10 @@ Mutating actions require:
 - elevated 64-bit Windows PowerShell;
 - Windows 10 22H2/build 19045, or Windows 11 build 22000 or newer;
 - no domain, Entra, workplace, or MDM enrollment;
-- exactly one loaded human profile and one resolvable target user; and
-- the target user's registry hive loaded.
+- exactly one loaded human profile and one resolvable target user;
+- the target user's registry hive loaded; and
+- identity services that do not share an `svchost.exe` process with the Task
+  Scheduler (`Schedule`) or WMI (`Winmgmt`) service.
 
 Windows 11 25H2/build 26200 is the fully lab-validated line. Other accepted builds
 produce a warning. Status can inspect unsupported systems, but mutation refuses
@@ -92,10 +94,67 @@ After the gate verifies, Wipe clears known GDID state from the target user,
 For target-user device credentials, the script may create a short-lived limited
 scheduled task in the interactive logon session, delete only the two known device
 targets, then remove the task and result file. It does not delete the user's MSA
-account credential.
+account credential. The helper waits for the Task Scheduler service and retries once
+if the task produces no output; a helper that ran and reported its own errors is not
+retried.
 
 Protect rechecks the gate before mutation and after settling services. A failed gate
 or postcondition returns failure rather than claiming partial success.
+
+## Shared svchost refusal
+
+Windows only gives each service its own `svchost.exe` process when physical RAM
+exceeds `SvcHostSplitThresholdInKB`, which defaults to 16 GB. Below that threshold
+`wlidsvc` and `TokenBroker` run inside a single `svchost.exe -k netsvcs -p` process
+shared with `Schedule` (Task Scheduler) and `Winmgmt` (WMI).
+
+That matters because the credential helper runs as a scheduled task and the
+`ScheduledTasks` cmdlets go through CIM. Force-stopping a co-hosted identity service
+can fail-fast the shared host — `svchost.exe` faulting in `combase.dll` with
+`0xC0000602` — which takes Task Scheduler and WMI down with it, kills the in-flight
+helper, and leaves the machine half-quiesced.
+
+Before stopping anything, Protect maps each service it intends to stop to its host
+process and refuses if any of them shares that process with `Schedule` or `Winmgmt`:
+
+```
+Identity services share a host process with services degdid depends on; nothing was
+stopped and no identity state was changed.
+Error: wlidsvc shares svchost.exe process 1656 with Schedule, Winmgmt; stopping it
+can take those services down with it.
+```
+
+This exits `5`. No service is stopped and no identity state is touched, so the system
+is unchanged. To make the machine eligible, force per-service splitting by setting
+the threshold below installed RAM in KB and rebooting:
+
+```powershell
+Set-ItemProperty `
+  -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' `
+  -Name 'SvcHostSplitThresholdInKB' `
+  -Value 4194304 `
+  -Type DWord
+```
+
+The default value is `16777216`. Splitting raises idle memory use somewhat because
+each service gets its own process.
+
+## Service state after a failed run
+
+Stopping a busy `wlidsvc` can require setting it to the `Disabled` start type first.
+That start type persists across reboots and silently breaks Microsoft Account
+sign-in, so it is never left implicit:
+
+- When a step fails before anything has been written to an identity store, Protect
+  restores the services it stopped and reports `services were restored`.
+- When services are deliberately left quiesced — a lost block gate, an incomplete
+  fail-closed barrier — every service still on the temporary start type is named
+  along with the command that restores it:
+
+```
+ServiceLeftDisabled wlidsvc: start type is still Disabled (original: Manual).
+Restore with: Set-Service -Name wlidsvc -StartupType Manual
+```
 
 ## Unblock and recovery
 
@@ -124,7 +183,7 @@ produce `RealGdidPresent`. Canonical protection uses Wipe.
 - `2` — unsupported mutation environment.
 - `3` — block verification failure.
 - `4` — safe hosts-file refusal.
-- `5` — Wipe/Decoy operation or postcondition failure.
+- `5` — Wipe/Decoy operation, service-host precondition, or postcondition failure.
 - `6` — target-user resolution failure.
 
 For control semantics and residual risk, see
