@@ -1,6 +1,6 @@
 ﻿# degdid
 
-Last updated: 2026-07-16
+Last updated: 2026-08-12
 
 Research and practical hardening for Microsoft's **Global Device Identifier (GDID)**, a server-assigned installation identifier that Windows can acquire even when the interactive user has only a local account.
 
@@ -27,12 +27,22 @@ The mutation path is designed for an unmanaged personal Windows installation wit
 one loaded human profile:
 
 - Windows 10 22H2/build 19045, or Windows 11 build 22000 or newer;
-- no domain, Entra, workplace, or MDM enrollment; and
-- an elevated 64-bit Windows PowerShell session.
+- no domain, Entra, workplace, or MDM enrollment;
+- an elevated 64-bit Windows PowerShell session; and
+- identity services that do not share an `svchost.exe` process with Task Scheduler
+  or WMI.
 
 Windows 11 25H2/build 26200 is the fully lab-validated line. Other accepted builds
 warn. Managed systems, ambiguous users, and multiple loaded human profiles are
 refused instead of guessed at.
+
+That last requirement usually means more than 16 GB of RAM. Windows only gives each
+service its own `svchost.exe` when physical RAM exceeds `SvcHostSplitThresholdInKB`,
+which defaults to 16 GB. Below it, `wlidsvc` and `TokenBroker` share one process with
+Task Scheduler and WMI, and stopping them can fail-fast the whole host — which is
+also how Protect itself inspects device credentials. Protect detects that layout and
+refuses before stopping anything; see
+[`recovery`](docs/usage.md#shared-svchost-refusal) for the one-line remedy.
 
 Status can still inspect unsupported systems. See the
 [`usage guide`](docs/usage.md) for the complete eligibility rules.
@@ -72,6 +82,12 @@ Protect:
 
 The network gate is applied before identity mutation. If a required check fails, the
 script stops instead of continuing with a partial protection state.
+
+Before step 3 stops any service, Protect checks that none of the services it is about
+to stop share a host process with the services it depends on, and aborts without
+touching anything if they do. If a later step fails after services are already down,
+Protect restores them when nothing has been written yet, and otherwise names every
+service it left stopped or disabled along with the command that restores it.
 
 Canonical protection uses Wipe. Decoy mode exists for research but is not considered
 a clean completion state. Technical mutation details live in
@@ -118,6 +134,7 @@ and limitations that produced the current design.
 - [`docs/surfaces.md`](docs/surfaces.md) — registry, credential, service, and endpoint inventory.
 - [`docs/experiments/`](docs/experiments/) — complete lab and field evidence.
 - [`docs/open-questions.md`](docs/open-questions.md) — the short remaining research backlog.
+- [`CHANGELOG.md`](CHANGELOG.md) — dated record of changes to the script and docs.
 
 ## Safety and ethics
 

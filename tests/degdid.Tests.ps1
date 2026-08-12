@@ -740,6 +740,7 @@ Describe 'degdid fail-closed service sequencing' {
     }
     Mock Get-GdidInventory { $script:emptyInventory }
     Mock Get-GdidServiceSnapshot { $script:serviceSnapshot }
+    Mock Get-GdidServiceHostConflict { @() }
     Mock Stop-GdidServices { $true }
     Mock Resume-GdidServices { $true }
     Mock Set-FailClosedMintBarrier { $true }
@@ -1177,6 +1178,253 @@ Describe 'degdid identity service snapshot' {
     $snap = Get-GdidServiceSnapshot
     $snap.Success | Should Be $false
     $snap.Error | Should Match 'transitional'
+  }
+}
+
+Describe 'degdid shared svchost host detection' {
+  $runningWlidsvc = @(
+    [pscustomobject]@{ Name = 'wlidsvc'; WasRunning = $true; StartType = 'Manual' }
+  )
+
+  It 'flags a service co-hosted with the Task Scheduler service' {
+    Mock Get-GdidServiceHostMap {
+      @(
+        [pscustomobject]@{ Name = 'wlidsvc';  ProcessId = 1656 },
+        [pscustomobject]@{ Name = 'Schedule'; ProcessId = 1656 },
+        [pscustomobject]@{ Name = 'Themes';   ProcessId = 1656 },
+        [pscustomobject]@{ Name = 'CDPSvc';   ProcessId = 2100 }
+      )
+    }
+    $conflicts = @(Get-GdidServiceHostConflict -ServiceStates $runningWlidsvc)
+    $conflicts.Count | Should Be 1
+    $conflicts[0].Name | Should Be 'wlidsvc'
+    $conflicts[0].ProcessId | Should Be 1656
+    ($conflicts[0].SharedWith -join ',') | Should Be 'Schedule'
+  }
+
+  It 'flags co-hosting with WMI as well as the scheduler' {
+    Mock Get-GdidServiceHostMap {
+      @(
+        [pscustomobject]@{ Name = 'wlidsvc';  ProcessId = 1656 },
+        [pscustomobject]@{ Name = 'Schedule'; ProcessId = 1656 },
+        [pscustomobject]@{ Name = 'Winmgmt';  ProcessId = 1656 }
+      )
+    }
+    $conflicts = @(Get-GdidServiceHostConflict -ServiceStates $runningWlidsvc)
+    ($conflicts[0].SharedWith -join ',') | Should Be 'Schedule,Winmgmt'
+  }
+
+  It 'accepts a service that owns its host process' {
+    Mock Get-GdidServiceHostMap {
+      @(
+        [pscustomobject]@{ Name = 'wlidsvc';  ProcessId = 1656 },
+        [pscustomobject]@{ Name = 'Schedule'; ProcessId = 2100 },
+        [pscustomobject]@{ Name = 'Winmgmt';  ProcessId = 2404 }
+      )
+    }
+    @(Get-GdidServiceHostConflict -ServiceStates $runningWlidsvc).Count |
+      Should Be 0
+  }
+
+  It 'ignores services that are not running and so will not be stopped' {
+    Mock Get-GdidServiceHostMap {
+      @(
+        [pscustomobject]@{ Name = 'wlidsvc';  ProcessId = 0 },
+        [pscustomobject]@{ Name = 'Schedule'; ProcessId = 1656 }
+      )
+    }
+    $stopped = @(
+      [pscustomobject]@{ Name = 'wlidsvc'; WasRunning = $false; StartType = 'Manual' }
+    )
+    @(Get-GdidServiceHostConflict -ServiceStates $stopped).Count | Should Be 0
+  }
+
+  It 'explains the conflict and names the remedy' {
+    $conflicts = @(
+      [pscustomobject]@{
+        Name = 'wlidsvc'
+        ProcessId = 1656
+        SharedWith = @('Schedule', 'Winmgmt')
+      }
+    )
+    $errorLines = @(Get-GdidServiceHostConflictError -Conflicts $conflicts)
+    $errorLines.Count | Should Be 2
+    $errorLines[0] | Should Match 'wlidsvc shares svchost.exe process 1656'
+    $errorLines[0] | Should Match 'Schedule, Winmgmt'
+    $errorLines[1] | Should Match 'SvcHostSplitThresholdInKB'
+  }
+}
+
+Describe 'degdid shared svchost preflight' {
+  BeforeEach {
+    $script:testModel = [pscustomobject]@{
+      Errors = @()
+      Lids = @()
+      CachePaths = @()
+      CredentialAccessMode = 'DirectCurrentSession'
+      CredentialTargets = @()
+      SystemCredentialAccessSupported = $true
+      SystemCredentialTargets = @()
+    }
+    Mock Get-GdidSourceModel { $script:testModel }
+    Mock Test-GdidSourceModelSafety {
+      [pscustomobject]@{ Success = $true; Errors = @() }
+    }
+    Mock Get-GdidInventory {
+      [pscustomobject]@{
+        Errors = @()
+        AllRealPuids = @()
+        ActiveRealPuids = @()
+        ResidualRealPuids = @()
+        Entries = @()
+        PropertyValues = @()
+        TokenKeys = @()
+        NegativeCacheKeys = @()
+        CacheArtifacts = @()
+        CredentialInspectionAvailable = $true
+        DeviceCredentials = @()
+      }
+    }
+    Mock Get-GdidServiceSnapshot {
+      [pscustomobject]@{
+        Success = $true
+        Error = $null
+        Services = @(
+          [pscustomobject]@{
+            Name = 'wlidsvc'
+            WasRunning = $true
+            StartType = 'Manual'
+            TemporarilyDisabled = $false
+          }
+        )
+      }
+    }
+    Mock Stop-GdidServices { $true }
+    Mock Resume-GdidServices { $true }
+    Mock Set-FailClosedMintBarrier { $true }
+  }
+
+  It 'stops nothing when an identity service shares its host with a dependency' {
+    Mock Get-GdidServiceHostConflict {
+      @(
+        [pscustomobject]@{
+          Name = 'wlidsvc'
+          ProcessId = 1656
+          SharedWith = @('Schedule')
+        }
+      )
+    }
+
+    $result = Invoke-IdentityMutation `
+      -Mode Wipe `
+      -Target ([pscustomobject]@{ Sid = 'test' })
+
+    $result.Success | Should Be $false
+    $result.ExitCode | Should Be 5
+    $result.Message | Should Match 'share a host process'
+    ($result.Errors -join ' ') | Should Match 'SvcHostSplitThresholdInKB'
+    Assert-MockCalled Stop-GdidServices 0 -Scope It
+    Assert-MockCalled Set-FailClosedMintBarrier 0 -Scope It
+  }
+
+  It 'restores services when the quiesced inventory fails' {
+    Mock Get-GdidServiceHostConflict { @() }
+    Mock Get-ProtectionGate { [pscustomobject]@{ Healthy = $true } }
+    $script:inventoryCall = 0
+    Mock Get-GdidInventory {
+      $script:inventoryCall++
+      [pscustomobject]@{
+        Errors = $(if ($script:inventoryCall -ge 2) {
+          @('TargetUserDeviceCredentials: Credential helper produced no result.')
+        } else {
+          @()
+        })
+        AllRealPuids = @()
+        ActiveRealPuids = @()
+        ResidualRealPuids = @()
+        Entries = @()
+        PropertyValues = @()
+        TokenKeys = @()
+        NegativeCacheKeys = @()
+        CacheArtifacts = @()
+        CredentialInspectionAvailable = $true
+        DeviceCredentials = @()
+      }
+    }
+
+    $result = Invoke-IdentityMutation `
+      -Mode Wipe `
+      -Target ([pscustomobject]@{ Sid = 'test' })
+
+    $result.Success | Should Be $false
+    $result.ExitCode | Should Be 5
+    $result.Message | Should Match 'services were restored'
+    Assert-MockCalled Resume-GdidServices 1 -Scope It
+    Assert-MockCalled Set-FailClosedMintBarrier 0 -Scope It
+  }
+}
+
+Describe 'degdid scheduled task result decoding' {
+  It 'explains a terminated helper process' {
+    $text = Format-GdidTaskResultCode -Info ([pscustomobject]@{
+      LastTaskResult = 3221225786
+    })
+    $text | Should Match '0xC000013A'
+    $text | Should Match 'Task Scheduler service'
+  }
+
+  It 'reports an ordinary result code without embellishment' {
+    $text = Format-GdidTaskResultCode -Info ([pscustomobject]@{
+      LastTaskResult = 1
+    })
+    $text | Should Be '1 (0x00000001)'
+  }
+
+  It 'reports an absent task info object' {
+    Format-GdidTaskResultCode -Info $null | Should Be 'unknown'
+  }
+}
+
+Describe 'degdid disabled-service reporting' {
+  It 'names a service left on the temporary Disabled start type' {
+    $output = @(
+      Write-MutationResult -Result ([pscustomobject]@{
+        Message = 'failed'
+        CapturedCount = 0
+        Decoy = $null
+        Results = @()
+        Errors = @()
+        ServiceStates = @(
+          [pscustomobject]@{
+            Name = 'wlidsvc'
+            StartType = 'Manual'
+            TemporarilyDisabled = $true
+          }
+        )
+      })
+    )
+    ($output -join "`n") | Should Match 'ServiceLeftDisabled wlidsvc'
+    ($output -join "`n") | Should Match 'Set-Service -Name wlidsvc -StartupType Manual'
+  }
+
+  It 'stays quiet when no service was left disabled' {
+    $output = @(
+      Write-MutationResult -Result ([pscustomobject]@{
+        Message = 'ok'
+        CapturedCount = 0
+        Decoy = $null
+        Results = @()
+        Errors = @()
+        ServiceStates = @(
+          [pscustomobject]@{
+            Name = 'wlidsvc'
+            StartType = 'Manual'
+            TemporarilyDisabled = $false
+          }
+        )
+      })
+    )
+    ($output -join "`n") | Should Not Match 'ServiceLeftDisabled'
   }
 }
 
