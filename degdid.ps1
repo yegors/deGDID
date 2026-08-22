@@ -742,6 +742,13 @@ function Write-HostsDocumentAtomic {
       )
     }
     [System.IO.File]::WriteAllBytes($temporary, $Bytes)
+    $attrs = [System.IO.File]::GetAttributes($Path)
+    if (($attrs -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+      [System.IO.File]::SetAttributes(
+        $Path,
+        $attrs -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+      )
+    }
     [System.IO.File]::Replace($temporary, $Path, $backup, $false)
   } finally {
     if ([System.IO.File]::Exists($temporary)) {
