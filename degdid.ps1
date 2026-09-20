@@ -2083,7 +2083,7 @@ function Get-EnvironmentState {
     IsLabValidatedBuild = (
       $build -eq $script:LabValidatedBuild -and
       $displayVersion -eq $script:LabValidatedDisplayVersion -and
-      $roleAllowed
+      $workstation
     )
     Is64BitProcess = [Environment]::Is64BitProcess
     Unmanaged = (
