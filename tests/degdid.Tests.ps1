@@ -8,6 +8,13 @@ Describe 'degdid current public interface' {
     ($parameters -contains 'Redact') | Should Be $false
     ($parameters -contains 'ShowIdentifier') | Should Be $false
   }
+
+  It 'exposes AllowServerSku to every action rather than one parameter set' {
+    $parameter = (Get-Command $scriptPath).Parameters['AllowServerSku']
+    $parameter | Should Not BeNullOrEmpty
+    $parameter.ParameterType | Should Be ([switch])
+    @($parameter.ParameterSets.Keys) -contains '__AllParameterSets' | Should Be $true
+  }
 }
 
 Describe 'degdid hosts parser' {
@@ -642,6 +649,107 @@ Describe 'degdid mutation preflight' {
     $result = Get-MutationPreflight -Environment $environment
     $result.Allowed | Should Be $false
     $result.ExitCode | Should Be 2
+  }
+}
+
+Describe 'degdid operating system role contract' {
+  BeforeEach {
+    $script:osProductType = 1
+    $script:partOfDomain = $false
+    $script:osBuild = '26200'
+    $script:osDisplayVersion = '25H2'
+
+    Mock Get-ItemProperty {
+      [pscustomobject]@{
+        CurrentBuildNumber = $script:osBuild
+        DisplayVersion = $script:osDisplayVersion
+        ProductName = 'Test Windows'
+      }
+    }
+    Mock Get-CimInstance {
+      [pscustomobject]@{ ProductType = $script:osProductType }
+    } -ParameterFilter { $ClassName -eq 'Win32_OperatingSystem' }
+    Mock Get-CimInstance {
+      [pscustomobject]@{
+        PartOfDomain = $script:partOfDomain
+        UserName = $null
+      }
+    } -ParameterFilter { $ClassName -eq 'Win32_ComputerSystem' }
+    Mock Get-CimInstance { @() } -ParameterFilter {
+      $ClassName -eq 'Win32_UserProfile'
+    }
+    Mock Get-DsregJoinState {
+      [pscustomobject]@{ Known = $true; EntraJoined = $false; Error = $null }
+    }
+    Mock Get-MdmEnrollmentState {
+      [pscustomobject]@{ Known = $true; Enrolled = $false; Error = $null }
+    }
+  }
+
+  It 'treats the lab-validated build on a workstation as lab validated' {
+    $environment = Get-EnvironmentState
+    $environment.IsLabValidatedBuild | Should Be $true
+    $environment.IsSupportedBuild | Should Be $true
+  }
+
+  It 'never reports a Server SKU as the lab-validated build' {
+    $script:osProductType = 3
+    $AllowServerSku = $true
+
+    $environment = Get-EnvironmentState
+
+    $environment.IsLabValidatedBuild | Should Be $false
+    $environment.IsSupportedBuild | Should Be $true
+  }
+
+  It 'refuses a standalone Server SKU without the opt-in switch' {
+    $script:osProductType = 3
+
+    $environment = Get-EnvironmentState
+
+    $environment.IsSupportedBuild | Should Be $false
+    $environment.IsLabValidatedBuild | Should Be $false
+    (
+      @($environment.UnsupportedReasons) -match 're-run with -AllowServerSku'
+    ).Count | Should Be 1
+  }
+
+  It 'allows an opted-in standalone Server and warns about weaker assumptions' {
+    $script:osProductType = 3
+    $AllowServerSku = $true
+
+    $environment = Get-EnvironmentState
+
+    (
+      @($environment.UnsupportedReasons) -match 'workstation edition is required'
+    ).Count | Should Be 0
+    (@($environment.Warnings) -match '-AllowServerSku').Count | Should Be 1
+  }
+
+  It 'refuses a domain controller even with the Server opt-in' {
+    $script:osProductType = 2
+    $AllowServerSku = $true
+
+    $environment = Get-EnvironmentState
+
+    $environment.IsSupportedBuild | Should Be $false
+    $environment.IsLabValidatedBuild | Should Be $false
+    (
+      @($environment.UnsupportedReasons) -match 'Domain controllers are outside'
+    ).Count | Should Be 1
+  }
+
+  It 'refuses a domain-joined system even with the Server opt-in' {
+    $script:osProductType = 3
+    $script:partOfDomain = $true
+    $AllowServerSku = $true
+
+    $environment = Get-EnvironmentState
+
+    $environment.Supported | Should Be $false
+    (
+      @($environment.UnsupportedReasons) -match 'Domain-joined systems are outside'
+    ).Count | Should Be 1
   }
 }
 
